@@ -47,11 +47,11 @@ directories:
 # CPU-only build (for testing without CUDA)
 cpu: directories $(CPU_TARGET)
 
-$(CPU_TARGET): $(CPU_OBJECTS) src/main_cpu.o
+$(CPU_TARGET): $(CPU_OBJECTS) $(SVM_OBJECT) src/main_cpu.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # GPU build (main target)
-$(GPU_TARGET): $(CPU_OBJECTS) $(GPU_OBJECTS) src/main_gpu.o
+$(GPU_TARGET): $(CPU_OBJECTS) $(GPU_OBJECTS) $(SVM_OBJECT) src/main_gpu.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 # Full build with SVM

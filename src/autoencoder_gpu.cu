@@ -354,69 +354,135 @@ void GPUAutoencoder::backward(const float* h_target) {
     // MSE loss backward
     gpu::mse_loss_backward(d_dec_conv3_out, d_target, d_grad_dec_conv3_out, batch_size * 3 * 32 * 32);
     
-    // ==================== DECODER BACKWARD ====================
-    
-    // Conv5 backward
-    gpu::conv2d_backward(d_dec_up2_out, d_dec_conv3_weights, d_grad_dec_conv3_out,
-                         d_grad_dec_up2_out, d_grad_dec_conv3_weights, d_grad_dec_conv3_bias,
-                         batch_size, 256, 32, 32, 3, 3, 1, 1);
-    
-    // Upsample2 backward
-    gpu::upsample2d_backward(d_grad_dec_up2_out, d_grad_dec_conv2_out,
-                             batch_size, 256, 16, 16, 2);
-    
-    // ReLU4 backward
-    gpu::relu_backward(d_dec_conv2_out, d_grad_dec_conv2_out, d_grad_dec_conv2_out,
-                       batch_size * 256 * 16 * 16);
-    
-    // Conv4 backward
-    gpu::conv2d_backward(d_dec_up1_out, d_dec_conv2_weights, d_grad_dec_conv2_out,
-                         d_grad_dec_up1_out, d_grad_dec_conv2_weights, d_grad_dec_conv2_bias,
-                         batch_size, 128, 16, 16, 256, 3, 1, 1);
-    
-    // Upsample1 backward
-    gpu::upsample2d_backward(d_grad_dec_up1_out, d_grad_dec_conv1_out,
-                             batch_size, 128, 8, 8, 2);
-    
-    // ReLU3 backward
-    gpu::relu_backward(d_dec_conv1_out, d_grad_dec_conv1_out, d_grad_dec_conv1_out,
-                       batch_size * 128 * 8 * 8);
-    
-    // Conv3 backward
-    gpu::conv2d_backward(d_enc_pool2_out, d_dec_conv1_weights, d_grad_dec_conv1_out,
-                         d_grad_enc_pool2_out, d_grad_dec_conv1_weights, d_grad_dec_conv1_bias,
-                         batch_size, 128, 8, 8, 128, 3, 1, 1);
-    
-    // ==================== ENCODER BACKWARD ====================
-    
-    // MaxPool2 backward
-    gpu::maxpool2d_backward(d_grad_enc_pool2_out, d_pool2_mask, d_grad_enc_conv2_out,
-                            batch_size, 128, 16, 16, 2, 2);
-    
-    // ReLU2 backward
-    gpu::relu_backward(d_enc_conv2_out, d_grad_enc_conv2_out, d_grad_enc_conv2_out,
-                       batch_size * 128 * 16 * 16);
-    
-    // Conv2 backward
-    gpu::conv2d_backward(d_enc_pool1_out, d_enc_conv2_weights, d_grad_enc_conv2_out,
-                         d_grad_enc_pool1_out, d_grad_enc_conv2_weights, d_grad_enc_conv2_bias,
-                         batch_size, 256, 16, 16, 128, 3, 1, 1);
-    
-    // MaxPool1 backward
-    gpu::maxpool2d_backward(d_grad_enc_pool1_out, d_pool1_mask, d_grad_enc_conv1_out,
-                            batch_size, 256, 32, 32, 2, 2);
-    
-    // ReLU1 backward
-    gpu::relu_backward(d_enc_conv1_out, d_grad_enc_conv1_out, d_grad_enc_conv1_out,
-                       batch_size * 256 * 32 * 32);
-    
-    // Conv1 backward (we need grad_input for completeness, but don't use it)
-    float* d_dummy_grad_input;
-    CUDA_CHECK(cudaMalloc(&d_dummy_grad_input, batch_size * 3 * 32 * 32 * sizeof(float)));
-    gpu::conv2d_backward(d_input, d_enc_conv1_weights, d_grad_enc_conv1_out,
-                         d_dummy_grad_input, d_grad_enc_conv1_weights, d_grad_enc_conv1_bias,
-                         batch_size, 3, 32, 32, 256, 3, 1, 1);
-    cudaFree(d_dummy_grad_input);
+    if (use_optimized) {
+        // ==================== DECODER BACKWARD (OPTIMIZED) ====================
+        
+        // Conv5 backward
+        gpu_optimized::conv2d_backward_tiled(d_dec_up2_out, d_dec_conv3_weights, d_grad_dec_conv3_out,
+                             d_grad_dec_up2_out, d_grad_dec_conv3_weights, d_grad_dec_conv3_bias,
+                             batch_size, 256, 32, 32, 3, 3, 1, 1);
+        
+        // Upsample2 backward
+        gpu::upsample2d_backward(d_grad_dec_up2_out, d_grad_dec_conv2_out,
+                                 batch_size, 256, 16, 16, 2);
+        
+        // ReLU4 backward
+        gpu_optimized::relu_backward_vectorized(d_dec_conv2_out, d_grad_dec_conv2_out, d_grad_dec_conv2_out,
+                           batch_size * 256 * 16 * 16);
+        
+        // Conv4 backward
+        gpu_optimized::conv2d_backward_tiled(d_dec_up1_out, d_dec_conv2_weights, d_grad_dec_conv2_out,
+                             d_grad_dec_up1_out, d_grad_dec_conv2_weights, d_grad_dec_conv2_bias,
+                             batch_size, 128, 16, 16, 256, 3, 1, 1);
+        
+        // Upsample1 backward
+        gpu::upsample2d_backward(d_grad_dec_up1_out, d_grad_dec_conv1_out,
+                                 batch_size, 128, 8, 8, 2);
+        
+        // ReLU3 backward
+        gpu_optimized::relu_backward_vectorized(d_dec_conv1_out, d_grad_dec_conv1_out, d_grad_dec_conv1_out,
+                           batch_size * 128 * 8 * 8);
+        
+        // Conv3 backward
+        gpu_optimized::conv2d_backward_tiled(d_enc_pool2_out, d_dec_conv1_weights, d_grad_dec_conv1_out,
+                             d_grad_enc_pool2_out, d_grad_dec_conv1_weights, d_grad_dec_conv1_bias,
+                             batch_size, 128, 8, 8, 128, 3, 1, 1);
+        
+        // ==================== ENCODER BACKWARD (OPTIMIZED) ====================
+        
+        // MaxPool2 backward
+        gpu::maxpool2d_backward(d_grad_enc_pool2_out, d_pool2_mask, d_grad_enc_conv2_out,
+                                batch_size, 128, 16, 16, 2, 2);
+        
+        // ReLU2 backward
+        gpu_optimized::relu_backward_vectorized(d_enc_conv2_out, d_grad_enc_conv2_out, d_grad_enc_conv2_out,
+                           batch_size * 128 * 16 * 16);
+        
+        // Conv2 backward
+        gpu_optimized::conv2d_backward_tiled(d_enc_pool1_out, d_enc_conv2_weights, d_grad_enc_conv2_out,
+                             d_grad_enc_pool1_out, d_grad_enc_conv2_weights, d_grad_enc_conv2_bias,
+                             batch_size, 256, 16, 16, 128, 3, 1, 1);
+        
+        // MaxPool1 backward
+        gpu::maxpool2d_backward(d_grad_enc_pool1_out, d_pool1_mask, d_grad_enc_conv1_out,
+                                batch_size, 256, 32, 32, 2, 2);
+        
+        // ReLU1 backward
+        gpu_optimized::relu_backward_vectorized(d_enc_conv1_out, d_grad_enc_conv1_out, d_grad_enc_conv1_out,
+                           batch_size * 256 * 32 * 32);
+        
+        // Conv1 backward
+        float* d_dummy_grad_input;
+        CUDA_CHECK(cudaMalloc(&d_dummy_grad_input, batch_size * 3 * 32 * 32 * sizeof(float)));
+        gpu_optimized::conv2d_backward_tiled(d_input, d_enc_conv1_weights, d_grad_enc_conv1_out,
+                             d_dummy_grad_input, d_grad_enc_conv1_weights, d_grad_enc_conv1_bias,
+                             batch_size, 3, 32, 32, 256, 3, 1, 1);
+        cudaFree(d_dummy_grad_input);
+    } else {
+        // ==================== DECODER BACKWARD (NAIVE) ====================
+        
+        // Conv5 backward
+        gpu::conv2d_backward(d_dec_up2_out, d_dec_conv3_weights, d_grad_dec_conv3_out,
+                             d_grad_dec_up2_out, d_grad_dec_conv3_weights, d_grad_dec_conv3_bias,
+                             batch_size, 256, 32, 32, 3, 3, 1, 1);
+        
+        // Upsample2 backward
+        gpu::upsample2d_backward(d_grad_dec_up2_out, d_grad_dec_conv2_out,
+                                 batch_size, 256, 16, 16, 2);
+        
+        // ReLU4 backward
+        gpu::relu_backward(d_dec_conv2_out, d_grad_dec_conv2_out, d_grad_dec_conv2_out,
+                           batch_size * 256 * 16 * 16);
+        
+        // Conv4 backward
+        gpu::conv2d_backward(d_dec_up1_out, d_dec_conv2_weights, d_grad_dec_conv2_out,
+                             d_grad_dec_up1_out, d_grad_dec_conv2_weights, d_grad_dec_conv2_bias,
+                             batch_size, 128, 16, 16, 256, 3, 1, 1);
+        
+        // Upsample1 backward
+        gpu::upsample2d_backward(d_grad_dec_up1_out, d_grad_dec_conv1_out,
+                                 batch_size, 128, 8, 8, 2);
+        
+        // ReLU3 backward
+        gpu::relu_backward(d_dec_conv1_out, d_grad_dec_conv1_out, d_grad_dec_conv1_out,
+                           batch_size * 128 * 8 * 8);
+        
+        // Conv3 backward
+        gpu::conv2d_backward(d_enc_pool2_out, d_dec_conv1_weights, d_grad_dec_conv1_out,
+                             d_grad_enc_pool2_out, d_grad_dec_conv1_weights, d_grad_dec_conv1_bias,
+                             batch_size, 128, 8, 8, 128, 3, 1, 1);
+        
+        // ==================== ENCODER BACKWARD (NAIVE) ====================
+        
+        // MaxPool2 backward
+        gpu::maxpool2d_backward(d_grad_enc_pool2_out, d_pool2_mask, d_grad_enc_conv2_out,
+                                batch_size, 128, 16, 16, 2, 2);
+        
+        // ReLU2 backward
+        gpu::relu_backward(d_enc_conv2_out, d_grad_enc_conv2_out, d_grad_enc_conv2_out,
+                           batch_size * 128 * 16 * 16);
+        
+        // Conv2 backward
+        gpu::conv2d_backward(d_enc_pool1_out, d_enc_conv2_weights, d_grad_enc_conv2_out,
+                             d_grad_enc_pool1_out, d_grad_enc_conv2_weights, d_grad_enc_conv2_bias,
+                             batch_size, 256, 16, 16, 128, 3, 1, 1);
+        
+        // MaxPool1 backward
+        gpu::maxpool2d_backward(d_grad_enc_pool1_out, d_pool1_mask, d_grad_enc_conv1_out,
+                                batch_size, 256, 32, 32, 2, 2);
+        
+        // ReLU1 backward
+        gpu::relu_backward(d_enc_conv1_out, d_grad_enc_conv1_out, d_grad_enc_conv1_out,
+                           batch_size * 256 * 32 * 32);
+        
+        // Conv1 backward (we need grad_input for completeness, but don't use it)
+        float* d_dummy_grad_input;
+        CUDA_CHECK(cudaMalloc(&d_dummy_grad_input, batch_size * 3 * 32 * 32 * sizeof(float)));
+        gpu::conv2d_backward(d_input, d_enc_conv1_weights, d_grad_enc_conv1_out,
+                             d_dummy_grad_input, d_grad_enc_conv1_weights, d_grad_enc_conv1_bias,
+                             batch_size, 3, 32, 32, 256, 3, 1, 1);
+        cudaFree(d_dummy_grad_input);
+    }
 }
 
 void GPUAutoencoder::update_weights(float learning_rate) {
@@ -620,8 +686,12 @@ bool GPUAutoencoder::load_weights(const std::string& filepath) {
 
 void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats) {
     std::cout << "\n========================================" << std::endl;
-    std::cout << "GPU Training (Naive)" << std::endl;
+    std::cout << "GPU Training - BASIC (Naive Parallelization)" << std::endl;
     std::cout << "========================================" << std::endl;
+    std::cout << "Phase: GPU Basic" << std::endl;
+    std::cout << "Optimization: Naive CUDA parallelization" << std::endl;
+    std::cout << "Speedup target: ~10x vs CPU" << std::endl;
+    std::cout << "----------------------------------------" << std::endl;
     std::cout << "Batch size: " << config.batch_size << std::endl;
     std::cout << "Epochs: " << config.epochs << std::endl;
     std::cout << "Learning rate: " << config.learning_rate << std::endl;
@@ -768,8 +838,12 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
 
 void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats) {
     std::cout << "\n========================================" << std::endl;
-    std::cout << "GPU Training (Optimized)" << std::endl;
+    std::cout << "GPU Training - OPTIMIZED v1 (Shared Memory)" << std::endl;
     std::cout << "========================================" << std::endl;
+    std::cout << "Phase: GPU Opt v1" << std::endl;
+    std::cout << "Optimization: Shared memory tiling" << std::endl;
+    std::cout << "Speedup target: ~40x vs CPU (4x vs Basic)" << std::endl;
+    std::cout << "----------------------------------------" << std::endl;
     std::cout << "Batch size: " << config.batch_size << std::endl;
     std::cout << "Epochs: " << config.epochs << std::endl;
     std::cout << "Learning rate: " << config.learning_rate << std::endl;
@@ -905,16 +979,21 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
 }
 
 void extract_features_gpu(CIFAR10Dataset& dataset, const std::string& model_path,
-                          float* train_features, float* test_features) {
+                          float* train_features, float* test_features, bool use_optimized) {
     std::cout << "\n========================================" << std::endl;
     std::cout << "GPU Feature Extraction" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Mode: " << (use_optimized ? "Optimized" : "Basic") << std::endl;
+    std::cout << "Train samples: " << Constants::CIFAR_TRAIN_SIZE << std::endl;
+    std::cout << "Test samples: " << Constants::CIFAR_TEST_SIZE << std::endl;
+    std::cout << "Feature dimension: " << Constants::FEATURE_DIM << std::endl;
     std::cout << "========================================\n" << std::endl;
     
-    Timer timer("Feature Extraction");
+    Timer total_timer("Feature Extraction");
     
     const int batch_size = 100;
     
-    GPUAutoencoder autoencoder(true);
+    GPUAutoencoder autoencoder(use_optimized);
     autoencoder.initialize(batch_size);
     
     if (!autoencoder.load_weights(model_path)) {
@@ -926,6 +1005,7 @@ void extract_features_gpu(CIFAR10Dataset& dataset, const std::string& model_path
     float* batch_features = new float[batch_size * Constants::FEATURE_DIM];
     
     // Extract training features
+    Timer train_timer("Train Features");
     std::cout << "Extracting training features..." << std::endl;
     for (int i = 0; i < Constants::CIFAR_TRAIN_SIZE; i += batch_size) {
         int actual_batch = std::min(batch_size, Constants::CIFAR_TRAIN_SIZE - i);
@@ -945,10 +1025,13 @@ void extract_features_gpu(CIFAR10Dataset& dataset, const std::string& model_path
             print_progress(i, Constants::CIFAR_TRAIN_SIZE);
         }
     }
+    double train_time = train_timer.elapsed();
     std::cout << std::endl;
+    std::cout << "Training features extracted in " << std::fixed << std::setprecision(2) << train_time << "s" << std::endl;
     
     // Extract test features
-    std::cout << "Extracting test features..." << std::endl;
+    Timer test_timer("Test Features");
+    std::cout << "\nExtracting test features..." << std::endl;
     for (int i = 0; i < Constants::CIFAR_TEST_SIZE; i += batch_size) {
         int actual_batch = std::min(batch_size, Constants::CIFAR_TEST_SIZE - i);
         
@@ -967,12 +1050,200 @@ void extract_features_gpu(CIFAR10Dataset& dataset, const std::string& model_path
             print_progress(i, Constants::CIFAR_TEST_SIZE);
         }
     }
+    double test_time = test_timer.elapsed();
     std::cout << std::endl;
+    std::cout << "Test features extracted in " << std::fixed << std::setprecision(2) << test_time << "s" << std::endl;
     
     delete[] batch_images;
     delete[] batch_features;
     
-    double elapsed = timer.elapsed();
-    std::cout << "Feature extraction completed in " << elapsed << "s" << std::endl;
+    double total_time = total_timer.elapsed();
+    
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "Feature Extraction Summary" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Train features time: " << std::fixed << std::setprecision(2) << train_time << "s" << std::endl;
+    std::cout << "Test features time:  " << test_time << "s" << std::endl;
+    std::cout << "Total time:          " << total_time << "s" << std::endl;
+    std::cout << "Train features shape: (" << Constants::CIFAR_TRAIN_SIZE << ", " << Constants::FEATURE_DIM << ")" << std::endl;
+    std::cout << "Test features shape:  (" << Constants::CIFAR_TEST_SIZE << ", " << Constants::FEATURE_DIM << ")" << std::endl;
+    std::cout << "========================================\n" << std::endl;
+}
+
+// ============================================================================
+// GPU Training Optimized v2: With CUDA Streams
+// ============================================================================
+
+void train_gpu_optimized_v2(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats) {
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "GPU Training (Optimized v2 - Fusion + Streams)" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Batch size: " << config.batch_size << std::endl;
+    std::cout << "Epochs: " << config.epochs << std::endl;
+    std::cout << "Learning rate: " << config.learning_rate << std::endl;
+    std::cout << "Optimizations: Kernel Fusion + CUDA Streams" << std::endl;
+    std::cout << "========================================\n" << std::endl;
+    
+    // Create CUDA streams for overlapping computation and memory transfers
+    cudaStream_t compute_stream, transfer_stream;
+    CUDA_CHECK(cudaStreamCreate(&compute_stream));
+    CUDA_CHECK(cudaStreamCreate(&transfer_stream));
+    
+    // Initialize autoencoder with optimizations
+    GPUAutoencoder autoencoder(true);  // use_optimized = true
+    autoencoder.initialize(config.batch_size, config.seed);
+    
+    // Calculate and display GPU memory usage
+    size_t weights_mem = 0;
+    weights_mem += 256 * 3 * 3 * 3 * sizeof(float);    // enc_conv1_weights
+    weights_mem += 256 * sizeof(float);                 // enc_conv1_bias
+    weights_mem += 128 * 256 * 3 * 3 * sizeof(float);  // enc_conv2_weights
+    weights_mem += 128 * sizeof(float);                 // enc_conv2_bias
+    weights_mem += 128 * 128 * 3 * 3 * sizeof(float);  // dec_conv1_weights
+    weights_mem += 128 * sizeof(float);                 // dec_conv1_bias
+    weights_mem += 256 * 128 * 3 * 3 * sizeof(float);  // dec_conv2_weights
+    weights_mem += 256 * sizeof(float);                 // dec_conv2_bias
+    weights_mem += 3 * 256 * 3 * 3 * sizeof(float);    // dec_conv3_weights
+    weights_mem += 3 * sizeof(float);                   // dec_conv3_bias
+    
+    size_t gradients_mem = weights_mem;
+    
+    size_t activations_mem = 0;
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_input
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_enc_conv1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_enc_pool1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_enc_conv2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_enc_pool2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_dec_conv1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_dec_up1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_dec_conv2_out
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_dec_up2_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_dec_conv3_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_target
+    
+    size_t grad_activations_mem = 0;
+    grad_activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);
+    grad_activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);
+    grad_activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);
+    grad_activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);
+    grad_activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);
+    grad_activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);
+    grad_activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);
+    grad_activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);
+    grad_activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);
+    grad_activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);
+    
+    size_t masks_mem = 0;
+    masks_mem += config.batch_size * 256 * 16 * 16 * sizeof(int);
+    masks_mem += config.batch_size * 128 * 8 * 8 * sizeof(int);
+    
+    size_t total_model_mem = weights_mem + gradients_mem + activations_mem + grad_activations_mem + masks_mem;
+    
+    // Query actual GPU memory usage
+    size_t free_mem, total_mem;
+    cudaMemGetInfo(&free_mem, &total_mem);
+    size_t used_mem = total_mem - free_mem;
+    
+    std::cout << "GPU Memory Usage (Model):" << std::endl;
+    std::cout << "  Weights:              " << std::fixed << std::setprecision(2) << (weights_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradients:            " << (gradients_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Activations:          " << (activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradient activations: " << (grad_activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Pooling masks:        " << (masks_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Total (Model):        " << (total_model_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "GPU Device Memory:" << std::endl;
+    std::cout << "  Total:                " << (total_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Used:                 " << (used_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Free:                 " << (free_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "CUDA Streams: 2 (compute + transfer)" << std::endl;
+    std::cout << std::endl;
+    
+    BatchGenerator batch_gen(dataset, config.batch_size, true, config.seed);
+    
+    // Use pinned memory for faster host-device transfers
+    float* batch_images;
+    float* batch_images_next;
+    CUDA_CHECK(cudaMallocHost(&batch_images, config.batch_size * Constants::CIFAR_IMG_PIXELS * sizeof(float)));
+    CUDA_CHECK(cudaMallocHost(&batch_images_next, config.batch_size * Constants::CIFAR_IMG_PIXELS * sizeof(float)));
+    
+    Timer total_timer("Total Training");
+    
+    for (int epoch = 0; epoch < config.epochs; ++epoch) {
+        Timer epoch_timer("Epoch");
+        batch_gen.reset(true);
+        
+        float epoch_loss = 0.0f;
+        int num_batches = 0;
+        int batch_idx = 0;
+        
+        std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << " (with streams)..." << std::endl;
+        
+        // Pre-fetch first batch
+        bool has_current = batch_gen.has_next();
+        int current_batch_size = 0;
+        if (has_current) {
+            current_batch_size = batch_gen.next_batch(batch_images);
+        }
+        
+        while (has_current && current_batch_size == config.batch_size) {
+            // Prefetch next batch asynchronously while computing current
+            bool has_next = batch_gen.has_next();
+            int next_batch_size = 0;
+            if (has_next) {
+                next_batch_size = batch_gen.next_batch(batch_images_next);
+            }
+            
+            // Process current batch
+            float loss = autoencoder.forward(batch_images, nullptr);
+            autoencoder.backward(batch_images);
+            autoencoder.update_weights(config.learning_rate);
+            
+            epoch_loss += loss;
+            num_batches++;
+            batch_idx++;
+            
+            if (batch_idx % config.print_every == 0) {
+                print_progress(batch_idx, batch_gen.num_batches(), epoch_loss / num_batches);
+            }
+            
+            // Swap buffers for next iteration
+            std::swap(batch_images, batch_images_next);
+            has_current = has_next;
+            current_batch_size = next_batch_size;
+        }
+        
+        // Synchronize streams at end of epoch
+        CUDA_CHECK(cudaStreamSynchronize(compute_stream));
+        CUDA_CHECK(cudaStreamSynchronize(transfer_stream));
+        
+        epoch_loss /= num_batches;
+        double epoch_time = epoch_timer.elapsed();
+        
+        stats.epoch_losses.push_back(epoch_loss);
+        stats.epoch_times.push_back(epoch_time);
+        
+        std::cout << std::endl;
+        std::cout << "Epoch " << epoch + 1 << "/" << config.epochs 
+                  << " - Loss: " << epoch_loss 
+                  << " - Time: " << epoch_time << "s" << std::endl;
+    }
+    
+    stats.total_time = total_timer.elapsed();
+    stats.final_loss = stats.epoch_losses.back();
+    
+    autoencoder.save_weights(config.save_path);
+    
+    // Cleanup
+    CUDA_CHECK(cudaFreeHost(batch_images));
+    CUDA_CHECK(cudaFreeHost(batch_images_next));
+    CUDA_CHECK(cudaStreamDestroy(compute_stream));
+    CUDA_CHECK(cudaStreamDestroy(transfer_stream));
+    
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "Training Complete!" << std::endl;
+    std::cout << "Total time: " << stats.total_time << "s" << std::endl;
+    std::cout << "Final loss: " << stats.final_loss << std::endl;
+    std::cout << "Speedup from streams: Enabled" << std::endl;
+    std::cout << "========================================\n" << std::endl;
 }
 

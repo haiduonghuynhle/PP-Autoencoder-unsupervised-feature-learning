@@ -239,12 +239,20 @@ public:
 // Training utilities
 // ============================================================================
 
+// Optimization levels
+enum class OptLevel {
+    GPU_BASIC = 0,    // Naive parallelization
+    GPU_OPT_V1 = 1,   // Shared memory tiling
+    GPU_OPT_V2 = 2    // Kernel fusion + CUDA streams
+};
+
 struct TrainingConfig {
     int batch_size = 64;
     int epochs = 20;
     float learning_rate = 0.001f;
     bool use_gpu = true;
-    bool use_optimized = false;
+    bool use_optimized = false;  // Legacy: true = opt_v1
+    OptLevel opt_level = OptLevel::GPU_BASIC;
     std::string save_path = "models/autoencoder.bin";
     int print_every = 100;  // Print loss every N batches
     unsigned int seed = 42;

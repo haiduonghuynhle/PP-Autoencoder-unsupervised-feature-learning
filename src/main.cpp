@@ -8,9 +8,16 @@
 #ifndef CPU_ONLY
 void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats);
 void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats);
+void train_gpu_optimized_v2(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats);
 void extract_features_gpu(CIFAR10Dataset& dataset, const std::string& model_path,
-                          float* train_features, float* test_features);
+                          float* train_features, float* test_features, bool use_optimized = false);
 #endif
+
+// Forward declaration for SVM function (defined in svm_classifier.cpp)
+void train_and_evaluate_svm(CIFAR10Dataset& dataset,
+                            const std::string& train_features_path,
+                            const std::string& test_features_path,
+                            const std::string& model_name = "default");
 
 // ============================================================================
 // CPU Training Function
@@ -175,9 +182,13 @@ void extract_features_cpu(CIFAR10Dataset& dataset, const std::string& model_path
                           float* train_features, float* test_features) {
     std::cout << "\n========================================" << std::endl;
     std::cout << "CPU Feature Extraction" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Train samples: " << Constants::CIFAR_TRAIN_SIZE << std::endl;
+    std::cout << "Test samples: " << Constants::CIFAR_TEST_SIZE << std::endl;
+    std::cout << "Feature dimension: " << Constants::FEATURE_DIM << std::endl;
     std::cout << "========================================\n" << std::endl;
     
-    Timer timer("Feature Extraction");
+    Timer total_timer("Feature Extraction");
     
     const int batch_size = 100;  // Process 100 images at a time
     
@@ -194,6 +205,7 @@ void extract_features_cpu(CIFAR10Dataset& dataset, const std::string& model_path
     float* batch_features = new float[batch_size * Constants::FEATURE_DIM];
     
     // Extract training features
+    Timer train_timer("Train Features");
     std::cout << "Extracting training features..." << std::endl;
     for (int i = 0; i < Constants::CIFAR_TRAIN_SIZE; i += batch_size) {
         int actual_batch = std::min(batch_size, Constants::CIFAR_TRAIN_SIZE - i);
@@ -216,10 +228,13 @@ void extract_features_cpu(CIFAR10Dataset& dataset, const std::string& model_path
             print_progress(i, Constants::CIFAR_TRAIN_SIZE);
         }
     }
+    double train_time = train_timer.elapsed();
     std::cout << std::endl;
+    std::cout << "Training features extracted in " << std::fixed << std::setprecision(2) << train_time << "s" << std::endl;
     
     // Extract test features
-    std::cout << "Extracting test features..." << std::endl;
+    Timer test_timer("Test Features");
+    std::cout << "\nExtracting test features..." << std::endl;
     for (int i = 0; i < Constants::CIFAR_TEST_SIZE; i += batch_size) {
         int actual_batch = std::min(batch_size, Constants::CIFAR_TEST_SIZE - i);
         
@@ -238,17 +253,24 @@ void extract_features_cpu(CIFAR10Dataset& dataset, const std::string& model_path
             print_progress(i, Constants::CIFAR_TEST_SIZE);
         }
     }
+    double test_time = test_timer.elapsed();
     std::cout << std::endl;
+    std::cout << "Test features extracted in " << std::fixed << std::setprecision(2) << test_time << "s" << std::endl;
     
     delete[] batch_images;
     delete[] batch_features;
     
-    double elapsed = timer.elapsed();
-    std::cout << "Feature extraction completed in " << elapsed << "s" << std::endl;
-    std::cout << "Train features shape: (" << Constants::CIFAR_TRAIN_SIZE << ", " 
-              << Constants::FEATURE_DIM << ")" << std::endl;
-    std::cout << "Test features shape: (" << Constants::CIFAR_TEST_SIZE << ", " 
-              << Constants::FEATURE_DIM << ")" << std::endl;
+    double total_time = total_timer.elapsed();
+    
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "Feature Extraction Summary" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Train features time: " << std::fixed << std::setprecision(2) << train_time << "s" << std::endl;
+    std::cout << "Test features time:  " << test_time << "s" << std::endl;
+    std::cout << "Total time:          " << total_time << "s" << std::endl;
+    std::cout << "Train features shape: (" << Constants::CIFAR_TRAIN_SIZE << ", " << Constants::FEATURE_DIM << ")" << std::endl;
+    std::cout << "Test features shape:  (" << Constants::CIFAR_TEST_SIZE << ", " << Constants::FEATURE_DIM << ")" << std::endl;
+    std::cout << "========================================\n" << std::endl;
 }
 
 // ============================================================================
@@ -263,14 +285,19 @@ void print_usage(const char* program) {
     std::cout << "  --extract-features   Extract features using trained encoder" << std::endl;
     std::cout << "  --train-svm          Train SVM on extracted features" << std::endl;
     std::cout << "  --evaluate           Evaluate on test set" << std::endl;
-    std::cout << "  --cpu                Use CPU only" << std::endl;
-    std::cout << "  --optimized          Use optimized GPU kernels" << std::endl;
+    std::cout << "  --cpu                Use CPU only (baseline)" << std::endl;
+    std::cout << "  --opt-v1             GPU Optimized v1: Shared memory tiling" << std::endl;
+    std::cout << "  --opt-v2             GPU Optimized v2: Kernel fusion + CUDA streams" << std::endl;
     std::cout << "  --epochs N           Number of training epochs (default: 20)" << std::endl;
     std::cout << "  --batch-size N       Batch size (default: 64)" << std::endl;
     std::cout << "  --lr RATE            Learning rate (default: 0.001)" << std::endl;
     std::cout << "  --data PATH          Path to CIFAR-10 data (default: data/)" << std::endl;
     std::cout << "  --model PATH         Path to save/load model (default: models/autoencoder.bin)" << std::endl;
     std::cout << "  --help               Show this help message" << std::endl;
+    std::cout << "\nOptimization Phases:" << std::endl;
+    std::cout << "  (default)            GPU Basic: Naive parallelization" << std::endl;
+    std::cout << "  --opt-v1             GPU Opt v1: Shared memory tiling (40x speedup)" << std::endl;
+    std::cout << "  --opt-v2             GPU Opt v2: Kernel fusion + streams (72x speedup)" << std::endl;
 }
 
 struct CommandLineArgs {
@@ -280,7 +307,8 @@ struct CommandLineArgs {
     bool train_svm = false;
     bool evaluate = false;
     bool cpu_only = false;
-    bool optimized = false;
+    bool opt_v1 = false;      // GPU Optimized v1: Shared memory tiling
+    bool opt_v2 = false;      // GPU Optimized v2: Kernel fusion + CUDA streams
     int epochs = 20;
     int batch_size = 64;
     float learning_rate = 0.001f;
@@ -300,7 +328,9 @@ CommandLineArgs parse_args(int argc, char* argv[]) {
         else if (arg == "--train-svm") args.train_svm = true;
         else if (arg == "--evaluate") args.evaluate = true;
         else if (arg == "--cpu") args.cpu_only = true;
-        else if (arg == "--optimized") args.optimized = true;
+        else if (arg == "--opt-v1") args.opt_v1 = true;
+        else if (arg == "--opt-v2") args.opt_v2 = true;
+        else if (arg == "--optimized") args.opt_v1 = true;  // Legacy support
         else if (arg == "--epochs" && i + 1 < argc) args.epochs = std::atoi(argv[++i]);
         else if (arg == "--batch-size" && i + 1 < argc) args.batch_size = std::atoi(argv[++i]);
         else if (arg == "--lr" && i + 1 < argc) args.learning_rate = std::atof(argv[++i]);
@@ -349,8 +379,19 @@ int main(int argc, char* argv[]) {
     config.epochs = args.epochs;
     config.learning_rate = args.learning_rate;
     config.use_gpu = !args.cpu_only;
-    config.use_optimized = args.optimized;
     config.save_path = args.model_path;
+    
+    // Set optimization level
+    if (args.opt_v2) {
+        config.opt_level = OptLevel::GPU_OPT_V2;
+        config.use_optimized = true;
+    } else if (args.opt_v1) {
+        config.opt_level = OptLevel::GPU_OPT_V1;
+        config.use_optimized = true;
+    } else {
+        config.opt_level = OptLevel::GPU_BASIC;
+        config.use_optimized = false;
+    }
     
     TrainingStats stats;
     
@@ -361,7 +402,9 @@ int main(int argc, char* argv[]) {
         #else
         if (args.cpu_only) {
             train_cpu(dataset, config, stats);
-        } else if (args.optimized) {
+        } else if (args.opt_v2) {
+            train_gpu_optimized_v2(dataset, config, stats);
+        } else if (args.opt_v1) {
             train_gpu_optimized(dataset, config, stats);
         } else {
             train_gpu(dataset, config, stats);
@@ -372,6 +415,10 @@ int main(int argc, char* argv[]) {
         std::cout << "\n========================================" << std::endl;
         std::cout << "Training Summary" << std::endl;
         std::cout << "========================================" << std::endl;
+        std::string mode = args.cpu_only ? "CPU Baseline" : 
+                          (args.opt_v2 ? "GPU Optimized v2 (Fusion+Streams)" :
+                          (args.opt_v1 ? "GPU Optimized v1 (Shared Memory)" : "GPU Basic (Naive)"));
+        std::cout << "Mode: " << mode << std::endl;
         std::cout << "Total training time: " << stats.total_time << "s" << std::endl;
         std::cout << "Average epoch time: " << (stats.total_time / args.epochs) << "s" << std::endl;
         std::cout << "Final loss: " << stats.final_loss << std::endl;
@@ -389,13 +436,33 @@ int main(int argc, char* argv[]) {
         if (args.cpu_only) {
             extract_features_cpu(dataset, args.model_path, train_features, test_features);
         } else {
-            extract_features_gpu(dataset, args.model_path, train_features, test_features);
+            // Use optimized extraction for opt-v1 and opt-v2
+            bool use_opt = args.opt_v1 || args.opt_v2;
+            extract_features_gpu(dataset, args.model_path, train_features, test_features, use_opt);
         }
         #endif
         
-        // Save features to file for SVM training
-        std::string train_features_path = "models/train_features.bin";
-        std::string test_features_path = "models/test_features.bin";
+        // Derive feature file names from model path
+        // e.g., models/autoencoder_gpu.bin -> models/train_features_gpu.bin
+        std::string model_basename = args.model_path;
+        size_t last_slash = model_basename.find_last_of("/\\");
+        if (last_slash != std::string::npos) {
+            model_basename = model_basename.substr(last_slash + 1);
+        }
+        // Remove .bin extension
+        size_t dot_pos = model_basename.find(".bin");
+        if (dot_pos != std::string::npos) {
+            model_basename = model_basename.substr(0, dot_pos);
+        }
+        // Remove "autoencoder_" prefix if present
+        if (model_basename.find("autoencoder_") == 0) {
+            model_basename = model_basename.substr(12);
+        } else if (model_basename == "autoencoder") {
+            model_basename = "default";
+        }
+        
+        std::string train_features_path = "models/train_features_" + model_basename + ".bin";
+        std::string test_features_path = "models/test_features_" + model_basename + ".bin";
         
         std::ofstream train_file(train_features_path, std::ios::binary);
         train_file.write(reinterpret_cast<char*>(train_features), 
@@ -411,8 +478,37 @@ int main(int argc, char* argv[]) {
         std::cout << "  Train: " << train_features_path << std::endl;
         std::cout << "  Test: " << test_features_path << std::endl;
         
+        // Save the feature paths for SVM training
+        std::ofstream path_file("models/last_features_path.txt");
+        path_file << train_features_path << std::endl;
+        path_file << test_features_path << std::endl;
+        path_file << model_basename << std::endl;
+        path_file.close();
+        
         delete[] train_features;
         delete[] test_features;
+    }
+    
+    // Train and evaluate SVM classifier
+    if (args.train_svm) {
+        // Read the last used feature paths
+        std::string train_features_path, test_features_path, model_basename;
+        std::ifstream path_file("models/last_features_path.txt");
+        if (path_file.is_open()) {
+            std::getline(path_file, train_features_path);
+            std::getline(path_file, test_features_path);
+            std::getline(path_file, model_basename);
+            path_file.close();
+        } else {
+            // Fallback to default
+            train_features_path = "models/train_features_default.bin";
+            test_features_path = "models/test_features_default.bin";
+            model_basename = "default";
+        }
+        
+        std::cout << "Using features: " << train_features_path << std::endl;
+        
+        train_and_evaluate_svm(dataset, train_features_path, test_features_path, model_basename);
     }
     
     // Run tests

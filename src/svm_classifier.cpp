@@ -15,6 +15,7 @@
 class SVMClassifier {
 private:
     std::string model_path;
+    std::string model_name;
     double C;
     double gamma;
     bool trained;
@@ -25,8 +26,8 @@ private:
     std::vector<std::vector<int>> confusion_matrix;
     
 public:
-    SVMClassifier(double c_param = 10.0, double gamma_param = -1.0)
-        : C(c_param), gamma(gamma_param), trained(false), accuracy(0.0) {
+    SVMClassifier(double c_param = 10.0, double gamma_param = -1.0, const std::string& name = "default")
+        : model_name(name), C(c_param), gamma(gamma_param), trained(false), accuracy(0.0) {
         confusion_matrix.resize(Constants::CIFAR_CLASSES, 
                                std::vector<int>(Constants::CIFAR_CLASSES, 0));
     }
@@ -75,27 +76,30 @@ public:
         // Calculate auto gamma if needed
         double actual_gamma = gamma < 0 ? (1.0 / feature_dim) : gamma;
         
-        // Save features in LIBSVM format
-        std::string train_file = "models/svm_train.txt";
+        // Save features in LIBSVM format (unique per model variant)
+        std::string train_file = "models/svm_train_" + model_name + ".txt";
         std::cout << "Saving training data to LIBSVM format..." << std::endl;
         if (!save_features_libsvm_format(features, labels, num_samples, feature_dim, train_file)) {
             return false;
         }
         
-        // Build LIBSVM command
-        model_path = "models/svm_model.txt";
+        // Build LIBSVM command (unique model path per variant)
+        model_path = "models/svm_model_" + model_name + ".txt";
         std::stringstream cmd;
         cmd << "cd libsvm && ./svm-train "
             << "-s 0 "  // C-SVC
-            << "-t 2 "  // RBF kernel
+            << "-t 2 "  // RBF kernel (higher accuracy, slower training)
+            << "-g " << actual_gamma << " "  // Gamma for RBF
             << "-c " << C << " "
-            << "-g " << actual_gamma << " "
-            << "-q "   // Quiet mode
+            // No -q flag: show progress (dots for each 1000 iterations)
             << "../" << train_file << " "
             << "../" << model_path;
         
-        std::cout << "Training SVM..." << std::endl;
+        std::cout << "Training SVM with RBF kernel (gamma=" << actual_gamma << ")..." << std::endl;
+        std::cout << "WARNING: This may take several hours for 50k samples!" << std::endl;
+        std::cout << "Progress: each line = one of 45 binary classifiers" << std::endl;
         std::cout << "Command: " << cmd.str() << std::endl;
+        std::cout << std::endl;
         
         int result = system(cmd.str().c_str());
         
@@ -121,15 +125,15 @@ public:
         
         Timer timer("SVM Prediction");
         
-        // Save test features
-        std::string test_file = "models/svm_test.txt";
+        // Save test features (unique per model variant)
+        std::string test_file = "models/svm_test_" + model_name + ".txt";
         std::vector<int> dummy_labels(num_samples, 0);
         if (!save_features_libsvm_format(features, dummy_labels.data(), num_samples, feature_dim, test_file)) {
             return false;
         }
         
-        // Predict using LIBSVM
-        std::string output_file = "models/svm_predictions.txt";
+        // Predict using LIBSVM (unique output file per variant)
+        std::string output_file = "models/svm_predictions_" + model_name + ".txt";
         std::stringstream cmd;
         cmd << "cd libsvm && ./svm-predict "
             << "-q "
@@ -240,10 +244,18 @@ public:
 
 void train_and_evaluate_svm(CIFAR10Dataset& dataset,
                             const std::string& train_features_path,
-                            const std::string& test_features_path) {
+                            const std::string& test_features_path,
+                            const std::string& model_name) {
     std::cout << "\n========================================" << std::endl;
     std::cout << "SVM Training and Evaluation Pipeline" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Model variant: " << model_name << std::endl;
+    std::cout << "Training samples: " << Constants::CIFAR_TRAIN_SIZE << std::endl;
+    std::cout << "Test samples: " << Constants::CIFAR_TEST_SIZE << std::endl;
+    std::cout << "Feature dimension: " << Constants::FEATURE_DIM << std::endl;
     std::cout << "========================================\n" << std::endl;
+    
+    Timer total_pipeline_timer("SVM Pipeline");
     
     // Load features from binary files
     float* train_features = new float[Constants::CIFAR_TRAIN_SIZE * Constants::FEATURE_DIM];
@@ -273,10 +285,11 @@ void train_and_evaluate_svm(CIFAR10Dataset& dataset,
     
     std::cout << "Features loaded successfully." << std::endl;
     
-    // Create SVM classifier
-    SVMClassifier svm(10.0, -1.0);  // C=10, gamma=auto
+    // Create SVM classifier with unique model name
+    SVMClassifier svm(10.0, -1.0, model_name);  // C=10, gamma=auto, unique name
     
     // Train SVM
+    Timer train_timer("SVM Training");
     if (!svm.train(train_features, dataset.get_train_labels(),
                    Constants::CIFAR_TRAIN_SIZE, Constants::FEATURE_DIM)) {
         std::cerr << "SVM training failed" << std::endl;
@@ -284,8 +297,11 @@ void train_and_evaluate_svm(CIFAR10Dataset& dataset,
         delete[] test_features;
         return;
     }
+    double train_time = train_timer.elapsed();
+    std::cout << "SVM training completed in " << std::fixed << std::setprecision(2) << train_time << "s" << std::endl;
     
     // Predict on test set
+    Timer predict_timer("SVM Prediction");
     std::vector<int> predictions;
     if (!svm.predict(test_features, Constants::CIFAR_TEST_SIZE, Constants::FEATURE_DIM, predictions)) {
         std::cerr << "SVM prediction failed" << std::endl;
@@ -293,17 +309,30 @@ void train_and_evaluate_svm(CIFAR10Dataset& dataset,
         delete[] test_features;
         return;
     }
+    double predict_time = predict_timer.elapsed();
+    std::cout << "SVM prediction completed in " << std::fixed << std::setprecision(2) << predict_time << "s" << std::endl;
     
     // Evaluate
+    Timer eval_timer("Evaluation");
     svm.evaluate(predictions, dataset.get_test_labels(), Constants::CIFAR_TEST_SIZE);
+    double eval_time = eval_timer.elapsed();
+    
+    double total_pipeline_time = total_pipeline_timer.elapsed();
     
     // Clean up
     delete[] train_features;
     delete[] test_features;
     
-    std::cout << "\nSVM Pipeline Complete!" << std::endl;
-    std::cout << "Final Accuracy: " << std::fixed << std::setprecision(2) 
-              << svm.get_accuracy() << "%" << std::endl;
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "SVM Pipeline Summary" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "SVM training time:   " << std::fixed << std::setprecision(2) << train_time << "s" << std::endl;
+    std::cout << "SVM prediction time: " << predict_time << "s" << std::endl;
+    std::cout << "Evaluation time:     " << eval_time << "s" << std::endl;
+    std::cout << "Total pipeline time: " << total_pipeline_time << "s" << std::endl;
+    std::cout << "----------------------------------------" << std::endl;
+    std::cout << "Test Accuracy:       " << svm.get_accuracy() << "%" << std::endl;
+    std::cout << "========================================\n" << std::endl;
 }
 
 // Scale features for better SVM performance
