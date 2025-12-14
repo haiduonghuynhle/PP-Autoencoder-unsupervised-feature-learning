@@ -18,7 +18,7 @@ void extract_features_gpu(CIFAR10Dataset& dataset, const std::string& model_path
 
 void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingStats& stats) {
     std::cout << "\n========================================" << std::endl;
-    std::cout << "CPU Training" << std::endl;
+    std::cout << "CPU Training (2% dataset)" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Batch size: " << config.batch_size << std::endl;
     std::cout << "Epochs: " << config.epochs << std::endl;
@@ -29,11 +29,68 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
     CPUAutoencoder autoencoder;
     autoencoder.initialize(config.batch_size, config.seed);
     
+    // Calculate and display memory usage
+    // Weights memory
+    size_t weights_mem = 0;
+    weights_mem += 256 * 3 * 3 * 3 * sizeof(float);    // enc_conv1_weights
+    weights_mem += 256 * sizeof(float);                 // enc_conv1_bias
+    weights_mem += 128 * 256 * 3 * 3 * sizeof(float);  // enc_conv2_weights
+    weights_mem += 128 * sizeof(float);                 // enc_conv2_bias
+    weights_mem += 128 * 128 * 3 * 3 * sizeof(float);  // dec_conv1_weights
+    weights_mem += 128 * sizeof(float);                 // dec_conv1_bias
+    weights_mem += 256 * 128 * 3 * 3 * sizeof(float);  // dec_conv2_weights
+    weights_mem += 256 * sizeof(float);                 // dec_conv2_bias
+    weights_mem += 3 * 256 * 3 * 3 * sizeof(float);    // dec_conv3_weights
+    weights_mem += 3 * sizeof(float);                   // dec_conv3_bias
+    
+    // Gradients (same size as weights)
+    size_t gradients_mem = weights_mem;
+    
+    // Activations memory (per batch)
+    size_t activations_mem = 0;
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // enc_conv1_out
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // enc_relu1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // enc_pool1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // enc_conv2_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // enc_relu2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // enc_pool2_out (latent)
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // dec_conv1_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // dec_relu1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // dec_up1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // dec_conv2_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // dec_relu2_out
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // dec_up2_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // dec_conv3_out
+    
+    // Gradient activations (backward pass)
+    size_t grad_activations_mem = activations_mem;
+    
+    // Pooling masks
+    size_t masks_mem = 0;
+    masks_mem += config.batch_size * 256 * 16 * 16 * sizeof(int);  // pool1_mask
+    masks_mem += config.batch_size * 128 * 8 * 8 * sizeof(int);    // pool2_mask
+    
+    size_t total_mem = weights_mem + gradients_mem + activations_mem + grad_activations_mem + masks_mem;
+    
+    std::cout << "Memory Usage:" << std::endl;
+    std::cout << "  Weights:              " << std::fixed << std::setprecision(2) << (weights_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradients:            " << (gradients_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Activations:          " << (activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradient activations: " << (grad_activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Pooling masks:        " << (masks_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Total:                " << (total_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << std::endl;
+    
     // Create batch generator
     BatchGenerator batch_gen(dataset, config.batch_size, true, config.seed);
     
     // Allocate batch buffer
     float* batch_images = new float[config.batch_size * Constants::CIFAR_IMG_PIXELS];
+    
+    // CPU mode: only use 2% of the dataset for faster training
+    int max_batches_per_epoch = batch_gen.num_batches() / 50;  // 2% of total batches
+    std::cout << "Using " << max_batches_per_epoch << " batches per epoch (2% of " 
+              << batch_gen.num_batches() << " total)" << std::endl;
     
     Timer total_timer("Total Training");
     
@@ -46,7 +103,9 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         int num_batches = 0;
         int batch_idx = 0;
         
-        while (batch_gen.has_next()) {
+        std::cout << "Starting epoch " << epoch + 1 << "..." << std::endl;
+        
+        while (batch_gen.has_next() && batch_idx < max_batches_per_epoch) {
             int actual_batch_size = batch_gen.next_batch(batch_images);
             
             if (actual_batch_size < config.batch_size) {
@@ -55,6 +114,7 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
             }
             
             // Forward pass
+            Timer batch_timer("Batch");
             float loss = autoencoder.forward(batch_images, nullptr);
             
             // Backward pass
@@ -67,10 +127,15 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
             num_batches++;
             batch_idx++;
             
-            // Print progress
+            // Print progress every batch for CPU (it's slow), or every print_every for GPU
+            #ifdef CPU_ONLY
+            print_progress(batch_idx, max_batches_per_epoch, epoch_loss / num_batches);
+            std::cout << " [" << std::fixed << std::setprecision(2) << batch_timer.elapsed() << "s/batch]" << std::flush;
+            #else
             if (batch_idx % config.print_every == 0) {
                 print_progress(batch_idx, batch_gen.num_batches(), epoch_loss / num_batches);
             }
+            #endif
         }
         
         epoch_loss /= num_batches;

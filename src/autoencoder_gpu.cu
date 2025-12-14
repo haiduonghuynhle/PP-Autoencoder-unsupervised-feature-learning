@@ -631,6 +631,70 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
     GPUAutoencoder autoencoder(false);
     autoencoder.initialize(config.batch_size, config.seed);
     
+    // Calculate and display GPU memory usage
+    size_t weights_mem = 0;
+    weights_mem += 256 * 3 * 3 * 3 * sizeof(float);    // enc_conv1_weights
+    weights_mem += 256 * sizeof(float);                 // enc_conv1_bias
+    weights_mem += 128 * 256 * 3 * 3 * sizeof(float);  // enc_conv2_weights
+    weights_mem += 128 * sizeof(float);                 // enc_conv2_bias
+    weights_mem += 128 * 128 * 3 * 3 * sizeof(float);  // dec_conv1_weights
+    weights_mem += 128 * sizeof(float);                 // dec_conv1_bias
+    weights_mem += 256 * 128 * 3 * 3 * sizeof(float);  // dec_conv2_weights
+    weights_mem += 256 * sizeof(float);                 // dec_conv2_bias
+    weights_mem += 3 * 256 * 3 * 3 * sizeof(float);    // dec_conv3_weights
+    weights_mem += 3 * sizeof(float);                   // dec_conv3_bias
+    
+    size_t gradients_mem = weights_mem;
+    
+    size_t activations_mem = 0;
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_input
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_enc_conv1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_enc_pool1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_enc_conv2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_enc_pool2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_dec_conv1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_dec_up1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_dec_conv2_out
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_dec_up2_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_dec_conv3_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_target
+    
+    size_t grad_activations_mem = 0;
+    grad_activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_grad_output
+    grad_activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_grad_dec_conv3_out
+    grad_activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_grad_dec_up2_out
+    grad_activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_grad_dec_conv2_out
+    grad_activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_grad_dec_up1_out
+    grad_activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_grad_dec_conv1_out
+    grad_activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_grad_enc_pool2_out
+    grad_activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_grad_enc_conv2_out
+    grad_activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_grad_enc_pool1_out
+    grad_activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_grad_enc_conv1_out
+    
+    size_t masks_mem = 0;
+    masks_mem += config.batch_size * 256 * 16 * 16 * sizeof(int);  // d_pool1_mask
+    masks_mem += config.batch_size * 128 * 8 * 8 * sizeof(int);    // d_pool2_mask
+    
+    size_t total_model_mem = weights_mem + gradients_mem + activations_mem + grad_activations_mem + masks_mem;
+    
+    // Query actual GPU memory usage
+    size_t free_mem, total_mem;
+    cudaMemGetInfo(&free_mem, &total_mem);
+    size_t used_mem = total_mem - free_mem;
+    
+    std::cout << "GPU Memory Usage (Model):" << std::endl;
+    std::cout << "  Weights:              " << std::fixed << std::setprecision(2) << (weights_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradients:            " << (gradients_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Activations:          " << (activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradient activations: " << (grad_activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Pooling masks:        " << (masks_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Total (Model):        " << (total_model_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "GPU Device Memory:" << std::endl;
+    std::cout << "  Total:                " << (total_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Used:                 " << (used_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Free:                 " << (free_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << std::endl;
+    
     // Create batch generator
     BatchGenerator batch_gen(dataset, config.batch_size, true, config.seed);
     
@@ -647,6 +711,8 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
+        
+        std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << "..." << std::endl;
         
         while (batch_gen.has_next()) {
             int actual_batch_size = batch_gen.next_batch(batch_images);
@@ -713,6 +779,70 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
     GPUAutoencoder autoencoder(true);
     autoencoder.initialize(config.batch_size, config.seed);
     
+    // Calculate and display GPU memory usage
+    size_t weights_mem = 0;
+    weights_mem += 256 * 3 * 3 * 3 * sizeof(float);    // enc_conv1_weights
+    weights_mem += 256 * sizeof(float);                 // enc_conv1_bias
+    weights_mem += 128 * 256 * 3 * 3 * sizeof(float);  // enc_conv2_weights
+    weights_mem += 128 * sizeof(float);                 // enc_conv2_bias
+    weights_mem += 128 * 128 * 3 * 3 * sizeof(float);  // dec_conv1_weights
+    weights_mem += 128 * sizeof(float);                 // dec_conv1_bias
+    weights_mem += 256 * 128 * 3 * 3 * sizeof(float);  // dec_conv2_weights
+    weights_mem += 256 * sizeof(float);                 // dec_conv2_bias
+    weights_mem += 3 * 256 * 3 * 3 * sizeof(float);    // dec_conv3_weights
+    weights_mem += 3 * sizeof(float);                   // dec_conv3_bias
+    
+    size_t gradients_mem = weights_mem;
+    
+    size_t activations_mem = 0;
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_input
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_enc_conv1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_enc_pool1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_enc_conv2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_enc_pool2_out
+    activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_dec_conv1_out
+    activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_dec_up1_out
+    activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_dec_conv2_out
+    activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_dec_up2_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_dec_conv3_out
+    activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_target
+    
+    size_t grad_activations_mem = 0;
+    grad_activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_grad_output
+    grad_activations_mem += config.batch_size * 3 * 32 * 32 * sizeof(float);    // d_grad_dec_conv3_out
+    grad_activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_grad_dec_up2_out
+    grad_activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_grad_dec_conv2_out
+    grad_activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_grad_dec_up1_out
+    grad_activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_grad_dec_conv1_out
+    grad_activations_mem += config.batch_size * 128 * 8 * 8 * sizeof(float);    // d_grad_enc_pool2_out
+    grad_activations_mem += config.batch_size * 128 * 16 * 16 * sizeof(float);  // d_grad_enc_conv2_out
+    grad_activations_mem += config.batch_size * 256 * 16 * 16 * sizeof(float);  // d_grad_enc_pool1_out
+    grad_activations_mem += config.batch_size * 256 * 32 * 32 * sizeof(float);  // d_grad_enc_conv1_out
+    
+    size_t masks_mem = 0;
+    masks_mem += config.batch_size * 256 * 16 * 16 * sizeof(int);  // d_pool1_mask
+    masks_mem += config.batch_size * 128 * 8 * 8 * sizeof(int);    // d_pool2_mask
+    
+    size_t total_model_mem = weights_mem + gradients_mem + activations_mem + grad_activations_mem + masks_mem;
+    
+    // Query actual GPU memory usage
+    size_t free_mem, total_mem;
+    cudaMemGetInfo(&free_mem, &total_mem);
+    size_t used_mem = total_mem - free_mem;
+    
+    std::cout << "GPU Memory Usage (Model):" << std::endl;
+    std::cout << "  Weights:              " << std::fixed << std::setprecision(2) << (weights_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradients:            " << (gradients_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Activations:          " << (activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Gradient activations: " << (grad_activations_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Pooling masks:        " << (masks_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Total (Model):        " << (total_model_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "GPU Device Memory:" << std::endl;
+    std::cout << "  Total:                " << (total_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Used:                 " << (used_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "  Free:                 " << (free_mem / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << std::endl;
+    
     BatchGenerator batch_gen(dataset, config.batch_size, true, config.seed);
     float* batch_images = new float[config.batch_size * Constants::CIFAR_IMG_PIXELS];
     
@@ -725,6 +855,8 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
+        
+        std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << "..." << std::endl;
         
         while (batch_gen.has_next()) {
             int actual_batch_size = batch_gen.next_batch(batch_images);
