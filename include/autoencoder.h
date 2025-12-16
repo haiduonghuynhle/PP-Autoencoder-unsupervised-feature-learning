@@ -231,6 +231,22 @@ public:
     
     // Set optimization mode
     void set_optimized(bool opt) { use_optimized = opt; }
+    
+    // ========== Stream-aware methods for opt-v2 ==========
+    // Copy input to device asynchronously (requires pinned host memory)
+    void copy_input_async(const float* h_input, cudaStream_t stream);
+    
+    // Run forward pass on specified stream (input must already be on device)
+    float forward_async(cudaStream_t stream);
+    
+    // Run backward pass on specified stream
+    void backward_async(cudaStream_t stream);
+    
+    // Update weights on specified stream
+    void update_weights_async(float learning_rate, cudaStream_t stream);
+    
+    // Get device input pointer for double buffering
+    float* get_d_input() { return d_input; }
 };
 
 #endif // __CUDACC__

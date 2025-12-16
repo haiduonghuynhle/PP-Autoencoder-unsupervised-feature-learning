@@ -284,8 +284,8 @@ void print_usage(const char* program) {
     std::cout << "  --train-svm          Train SVM on extracted features" << std::endl;
     std::cout << "  --evaluate           Evaluate on test set" << std::endl;
     std::cout << "  --cpu                Use CPU only (baseline)" << std::endl;
-    std::cout << "  --opt-v1             GPU Optimized v1: Shared memory tiling" << std::endl;
-    std::cout << "  --opt-v2             GPU Optimized v2: Kernel fusion + CUDA streams" << std::endl;
+    std::cout << "  --opt-v1             GPU Opt v1: Fused kernels + vectorization" << std::endl;
+    std::cout << "  --opt-v2             GPU Opt v2: Streams + pinned memory + double buffering" << std::endl;
     std::cout << "  --epochs N           Number of training epochs (default: 20)" << std::endl;
     std::cout << "  --batch-size N       Batch size (default: 64)" << std::endl;
     std::cout << "  --lr RATE            Learning rate (default: 0.001)" << std::endl;
@@ -294,8 +294,8 @@ void print_usage(const char* program) {
     std::cout << "  --help               Show this help message" << std::endl;
     std::cout << "\nOptimization Phases:" << std::endl;
     std::cout << "  (default)            GPU Basic: Naive parallelization" << std::endl;
-    std::cout << "  --opt-v1             GPU Opt v1: Shared memory tiling (40x speedup)" << std::endl;
-    std::cout << "  --opt-v2             GPU Opt v2: Kernel fusion + streams (72x speedup)" << std::endl;
+    std::cout << "  --opt-v1             GPU Opt v1: Fused Conv+ReLU, float4, loop unrolling" << std::endl;
+    std::cout << "  --opt-v2             GPU Opt v2: + CUDA streams, pinned memory, double buffering" << std::endl;
 }
 
 struct CommandLineArgs {
@@ -305,8 +305,8 @@ struct CommandLineArgs {
     bool train_svm = false;
     bool evaluate = false;
     bool cpu_only = false;
-    bool opt_v1 = false;      // GPU Optimized v1: Shared memory tiling
-    bool opt_v2 = false;      // GPU Optimized v2: Kernel fusion + CUDA streams
+    bool opt_v1 = false;      // GPU Optimized v1: Fused kernels
+    bool opt_v2 = false;      // GPU Optimized v2: + CUDA streams
     int epochs = 20;
     int batch_size = 64;
     float learning_rate = 0.001f;
