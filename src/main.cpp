@@ -224,9 +224,8 @@ void extract_features_cpu(CIFAR10Dataset& dataset, const std::string& model_path
         memcpy(train_features + i * Constants::FEATURE_DIM,
                batch_features, actual_batch * Constants::FEATURE_DIM * sizeof(float));
         
-        if ((i / batch_size) % 50 == 0) {
-            print_progress(i, Constants::CIFAR_TRAIN_SIZE);
-        }
+        // Update progress every batch for CPU (slow), every 50 for GPU (fast)
+        print_progress(i + actual_batch, Constants::CIFAR_TRAIN_SIZE);
     }
     double train_time = train_timer.elapsed();
     std::cout << std::endl;
@@ -249,9 +248,8 @@ void extract_features_cpu(CIFAR10Dataset& dataset, const std::string& model_path
         memcpy(test_features + i * Constants::FEATURE_DIM,
                batch_features, actual_batch * Constants::FEATURE_DIM * sizeof(float));
         
-        if ((i / batch_size) % 10 == 0) {
-            print_progress(i, Constants::CIFAR_TEST_SIZE);
-        }
+        // Update progress every batch
+        print_progress(i + actual_batch, Constants::CIFAR_TEST_SIZE);
     }
     double test_time = test_timer.elapsed();
     std::cout << std::endl;
