@@ -5,6 +5,139 @@
 #include <cstring>
 
 // ============================================================================
+// GPU Memory Tracking Utility
+// ============================================================================
+
+struct GPUMemoryInfo {
+    size_t used_bytes;
+    size_t total_bytes;
+    float used_mb;
+    float total_mb;
+    float usage_percent;
+};
+
+GPUMemoryInfo getGPUMemoryInfo() {
+    GPUMemoryInfo info;
+    size_t free_mem, total_mem;
+    cudaMemGetInfo(&free_mem, &total_mem);
+    info.total_bytes = total_mem;
+    info.used_bytes = total_mem - free_mem;
+    info.total_mb = total_mem / (1024.0f * 1024.0f);
+    info.used_mb = info.used_bytes / (1024.0f * 1024.0f);
+    info.usage_percent = 100.0f * info.used_bytes / total_mem;
+    return info;
+}
+
+void printGPUMemory(const char* label) {
+    GPUMemoryInfo info = getGPUMemoryInfo();
+    printf("[GPU Memory] %s: %.2f MB / %.2f MB (%.1f%%)\n",
+           label, info.used_mb, info.total_mb, info.usage_percent);
+}
+
+// Calculate theoretical memory usage for autoencoder
+size_t calculateAutoencoderMemory(int batch_size) {
+    size_t mem = 0;
+    
+    // Weights (fixed)
+    mem += 256 * 3 * 3 * 3 * sizeof(float);      // enc_conv1
+    mem += 256 * sizeof(float);                   // enc_conv1_bias
+    mem += 128 * 256 * 3 * 3 * sizeof(float);    // enc_conv2
+    mem += 128 * sizeof(float);                   // enc_conv2_bias
+    mem += 128 * 128 * 3 * 3 * sizeof(float);    // dec_conv1
+    mem += 128 * sizeof(float);                   // dec_conv1_bias
+    mem += 256 * 128 * 3 * 3 * sizeof(float);    // dec_conv2
+    mem += 256 * sizeof(float);                   // dec_conv2_bias
+    mem += 3 * 256 * 3 * 3 * sizeof(float);      // dec_conv3
+    mem += 3 * sizeof(float);                     // dec_conv3_bias
+    
+    size_t weight_mem = mem;
+    
+    // Gradients for weights (same size)
+    mem += weight_mem;
+    
+    // Activations (depend on batch size)
+    mem += batch_size * 3 * 32 * 32 * sizeof(float);      // input
+    mem += batch_size * 256 * 32 * 32 * sizeof(float);    // enc_conv1_out
+    mem += batch_size * 256 * 16 * 16 * sizeof(float);    // enc_pool1_out
+    mem += batch_size * 128 * 16 * 16 * sizeof(float);    // enc_conv2_out
+    mem += batch_size * 128 * 8 * 8 * sizeof(float);      // enc_pool2_out (latent)
+    mem += batch_size * 128 * 8 * 8 * sizeof(float);      // dec_conv1_out
+    mem += batch_size * 128 * 16 * 16 * sizeof(float);    // dec_up1_out
+    mem += batch_size * 256 * 16 * 16 * sizeof(float);    // dec_conv2_out
+    mem += batch_size * 256 * 32 * 32 * sizeof(float);    // dec_up2_out
+    mem += batch_size * 3 * 32 * 32 * sizeof(float);      // dec_conv3_out
+    mem += batch_size * 3 * 32 * 32 * sizeof(float);      // target
+    
+    // Pooling masks
+    mem += batch_size * 256 * 16 * 16 * sizeof(int);      // pool1_mask
+    mem += batch_size * 128 * 8 * 8 * sizeof(int);        // pool2_mask
+    
+    // Gradient activations (same as activations)
+    mem += batch_size * 3 * 32 * 32 * sizeof(float);      // grad_output
+    mem += batch_size * 3 * 32 * 32 * sizeof(float);      // grad_dec_conv3_out
+    mem += batch_size * 256 * 32 * 32 * sizeof(float);    // grad_dec_up2_out
+    mem += batch_size * 256 * 16 * 16 * sizeof(float);    // grad_dec_conv2_out
+    mem += batch_size * 128 * 16 * 16 * sizeof(float);    // grad_dec_up1_out
+    mem += batch_size * 128 * 8 * 8 * sizeof(float);      // grad_dec_conv1_out
+    mem += batch_size * 128 * 8 * 8 * sizeof(float);      // grad_enc_pool2_out
+    mem += batch_size * 128 * 16 * 16 * sizeof(float);    // grad_enc_conv2_out
+    mem += batch_size * 256 * 16 * 16 * sizeof(float);    // grad_enc_pool1_out
+    mem += batch_size * 256 * 32 * 32 * sizeof(float);    // grad_enc_conv1_out
+    
+    return mem;
+}
+
+void printMemoryBreakdown(int batch_size) {
+    printf("\n============================================================\n");
+    printf("GPU Memory Breakdown (batch_size=%d)\n", batch_size);
+    printf("============================================================\n");
+    
+    size_t weight_mem = 0;
+    weight_mem += 256 * 3 * 3 * 3;      // enc_conv1
+    weight_mem += 256;                   // enc_conv1_bias
+    weight_mem += 128 * 256 * 3 * 3;    // enc_conv2
+    weight_mem += 128;                   // enc_conv2_bias
+    weight_mem += 128 * 128 * 3 * 3;    // dec_conv1
+    weight_mem += 128;                   // dec_conv1_bias
+    weight_mem += 256 * 128 * 3 * 3;    // dec_conv2
+    weight_mem += 256;                   // dec_conv2_bias
+    weight_mem += 3 * 256 * 3 * 3;      // dec_conv3
+    weight_mem += 3;                     // dec_conv3_bias
+    weight_mem *= sizeof(float);
+    
+    size_t activation_mem = 0;
+    activation_mem += batch_size * 3 * 32 * 32;      // input
+    activation_mem += batch_size * 256 * 32 * 32;    // enc_conv1_out
+    activation_mem += batch_size * 256 * 16 * 16;    // enc_pool1_out
+    activation_mem += batch_size * 128 * 16 * 16;    // enc_conv2_out
+    activation_mem += batch_size * 128 * 8 * 8;      // enc_pool2_out
+    activation_mem += batch_size * 128 * 8 * 8;      // dec_conv1_out
+    activation_mem += batch_size * 128 * 16 * 16;    // dec_up1_out
+    activation_mem += batch_size * 256 * 16 * 16;    // dec_conv2_out
+    activation_mem += batch_size * 256 * 32 * 32;    // dec_up2_out
+    activation_mem += batch_size * 3 * 32 * 32;      // dec_conv3_out
+    activation_mem += batch_size * 3 * 32 * 32;      // target
+    activation_mem *= sizeof(float);
+    
+    size_t mask_mem = 0;
+    mask_mem += batch_size * 256 * 16 * 16;
+    mask_mem += batch_size * 128 * 8 * 8;
+    mask_mem *= sizeof(int);
+    
+    size_t grad_mem = weight_mem + activation_mem;  // Gradients mirror weights + activations
+    
+    size_t total = weight_mem * 2 + activation_mem * 2 + mask_mem;
+    
+    printf("  Weights:      %8.2f MB\n", weight_mem / (1024.0 * 1024.0));
+    printf("  Activations:  %8.2f MB\n", activation_mem / (1024.0 * 1024.0));
+    printf("  Gradients:    %8.2f MB\n", grad_mem / (1024.0 * 1024.0));
+    printf("  Pool Masks:   %8.2f MB\n", mask_mem / (1024.0 * 1024.0));
+    printf("  ---------------------------------\n");
+    printf("  TOTAL:        %8.2f MB\n", total / (1024.0 * 1024.0));
+    printf("============================================================\n\n");
+}
+
+// ============================================================================
 // GPUAutoencoder Implementation
 // ============================================================================
 
@@ -238,13 +371,19 @@ void GPUAutoencoder::initialize(int batch_sz, unsigned int seed) {
     delete[] h_bias;
     
     initialized = true;
+    
+    // Print memory usage info
+    printMemoryBreakdown(batch_size);
+    printGPUMemory("After initialization");
+    
     std::cout << "GPU Autoencoder initialized with batch size " << batch_size << std::endl;
 }
 
 float GPUAutoencoder::forward(const float* h_input, float* h_output_ptr) {
-    // Copy input to device
+    // Copy input to device (single copy - target is same as input for autoencoder)
     CUDA_CHECK(cudaMemcpy(d_input, h_input, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_target, h_input, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyHostToDevice));
+    // Use device-to-device copy for target (much faster than host-to-device)
+    CUDA_CHECK(cudaMemcpy(d_target, d_input, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyDeviceToDevice));
     
     if (use_optimized) {
         // Use optimized kernels
@@ -809,6 +948,9 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
             }
         }
         
+        // Synchronize at end of epoch for accurate timing
+        cudaDeviceSynchronize();
+        
         epoch_loss /= num_batches;
         double epoch_time = epoch_timer.elapsed();
         
@@ -951,6 +1093,9 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
                 print_progress(batch_idx, batch_gen.num_batches(), epoch_loss / num_batches);
             }
         }
+        
+        // Synchronize at end of epoch for accurate timing
+        cudaDeviceSynchronize();
         
         epoch_loss /= num_batches;
         double epoch_time = epoch_timer.elapsed();

@@ -157,9 +157,18 @@ def load_models(autoencoder_path, svm_path):
     
     # Load SVM
     print(f"Loading SVM from {svm_path}...")
-    with open(svm_path, 'rb') as f:
-        svm_model = pickle.load(f)
-    print("SVM loaded!")
+    try:
+        with open(svm_path, 'rb') as f:
+            svm_model = pickle.load(f)
+        print("SVM loaded!")
+    except EOFError:
+        print(f"ERROR: SVM file '{svm_path}' is corrupted or incomplete!")
+        print("Please re-train the SVM model using:")
+        print("  python train_svm_cuml.py --train models/train_features_gpu.bin --test models/test_features_gpu.bin --data /content/data/cifar-10-batches-bin")
+        raise
+    except Exception as e:
+        print(f"ERROR loading SVM: {e}")
+        raise
     
     return True
 
@@ -297,13 +306,6 @@ This demo uses a **CUDA-accelerated Autoencoder** for feature extraction and an 
                     height=300
                 )
                 classify_btn = gr.Button("🔍 Classify", variant="primary", size="lg")
-                
-                gr.Markdown("""
-### Tips:
-- Best results with clear, centered objects
-- Works with any image size (resized to 32×32)
-- Try images similar to CIFAR-10 categories
-                """)
             
             with gr.Column(scale=1):
                 result_text = gr.Markdown(label="Prediction Result")
@@ -317,21 +319,6 @@ This demo uses a **CUDA-accelerated Autoencoder** for feature extraction and an 
                         label="Autoencoder Reconstruction",
                         height=150
                     )
-        
-        # Example images
-        gr.Markdown("### Example Images")
-        gr.Examples(
-            examples=[
-                ["examples/airplane.jpg"],
-                ["examples/car.jpg"],
-                ["examples/bird.jpg"],
-                ["examples/cat.jpg"],
-            ],
-            inputs=input_image,
-            outputs=[result_text, processed_image, reconstructed_image],
-            fn=classify_image,
-            cache_examples=False
-        )
         
         # Footer
         gr.Markdown("""

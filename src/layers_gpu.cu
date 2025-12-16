@@ -519,24 +519,32 @@ float mse_loss_forward(const float* d_predicted, const float* d_target, int size
     int grid_size = (size + block_size - 1) / block_size;
     grid_size = min(grid_size, 1024);  // Limit number of blocks
     
-    float* d_partial_sums;
-    cudaMalloc(&d_partial_sums, grid_size * sizeof(float));
+    // Use static buffer to avoid repeated allocation
+    static float* d_partial_sums = nullptr;
+    static float* h_partial_sums = nullptr;
+    static int allocated_grid_size = 0;
+    
+    if (d_partial_sums == nullptr || grid_size > allocated_grid_size) {
+        if (d_partial_sums != nullptr) {
+            cudaFree(d_partial_sums);
+            delete[] h_partial_sums;
+        }
+        cudaMalloc(&d_partial_sums, grid_size * sizeof(float));
+        h_partial_sums = new float[grid_size];
+        allocated_grid_size = grid_size;
+    }
     
     mse_loss_kernel<<<grid_size, block_size, block_size * sizeof(float)>>>(
         d_predicted, d_target, d_partial_sums, size
     );
     
     // Copy partial sums to host and reduce
-    float* h_partial_sums = new float[grid_size];
     cudaMemcpy(h_partial_sums, d_partial_sums, grid_size * sizeof(float), cudaMemcpyDeviceToHost);
     
     float total_sum = 0.0f;
     for (int i = 0; i < grid_size; ++i) {
         total_sum += h_partial_sums[i];
     }
-    
-    delete[] h_partial_sums;
-    cudaFree(d_partial_sums);
     
     return total_sum / size;
 }
