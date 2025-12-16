@@ -699,8 +699,9 @@ float GPUAutoencoder::forward_async(cudaStream_t stream) {
                         batch_size, 256, 32, 32, 3, 3, 1, 1);
     
     // Compute MSE loss
-    float loss = gpu::mse_loss_forward(d_dec_conv3_out, d_target, 
-                                       batch_size * 3 * 32 * 32, d_grad_output);
+    float loss = gpu::mse_loss_forward(d_dec_conv3_out, d_target, batch_size * 3 * 32 * 32);
+    // Compute gradient for backward pass
+    gpu::mse_loss_backward(d_dec_conv3_out, d_target, d_grad_output, batch_size * 3 * 32 * 32);
     return loss;
 }
 
