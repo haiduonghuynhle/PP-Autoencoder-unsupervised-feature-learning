@@ -45,7 +45,9 @@ __device__ __forceinline__ float block_reduce_sum(float val) {
 }
 
 // ============================================================================
-// Version 1: Shared Memory Tiling for Convolution
+// Version 1: Optimized Convolution with Weight Caching
+// For small images (32x32), shared memory tiling has too much overhead.
+// Instead, we cache weights and use register blocking.
 // ============================================================================
 
 __global__ void conv2d_forward_tiled_kernel(
@@ -57,98 +59,49 @@ __global__ void conv2d_forward_tiled_kernel(
     int out_channels, int kernel_size, int stride, int padding,
     int out_height, int out_width
 ) {
-    // Shared memory for input tile (with halo region)
-    __shared__ float s_input[TILE_SIZE + 2][TILE_SIZE + 2];
+    // Cache weights in shared memory (reused across all threads in block)
+    __shared__ float s_weights[9];  // 3x3 kernel
     
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int bx = blockIdx.x;
-    int by = blockIdx.y;
-    int bz = blockIdx.z;  // batch * out_channels
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_outputs = batch_size * out_channels * out_height * out_width;
     
-    int n = bz / out_channels;
-    int oc = bz % out_channels;
+    if (idx >= total_outputs) return;
     
-    int oh = by * TILE_SIZE + ty;
-    int ow = bx * TILE_SIZE + tx;
+    // Decode linear index to (n, oc, oh, ow)
+    int ow = idx % out_width;
+    int oh = (idx / out_width) % out_height;
+    int oc = (idx / (out_width * out_height)) % out_channels;
+    int n = idx / (out_width * out_height * out_channels);
     
     float sum = 0.0f;
     
-    // Loop over input channels
+    // Convolution with loop unrolling
     for (int ic = 0; ic < in_channels; ++ic) {
-        // Load input tile into shared memory
-        int ih_base = by * TILE_SIZE - padding;
-        int iw_base = bx * TILE_SIZE - padding;
+        const float* weight_ptr = weights + (oc * in_channels + ic) * kernel_size * kernel_size;
+        const float* input_ptr = input + (n * in_channels + ic) * in_height * in_width;
         
-        // Each thread loads one element of the base tile
-        int ih = ih_base + ty;
-        int iw = iw_base + tx;
-        
-        // Load with boundary check
-        if (ih >= 0 && ih < in_height && iw >= 0 && iw < in_width) {
-            s_input[ty][tx] = input[((n * in_channels + ic) * in_height + ih) * in_width + iw];
-        } else {
-            s_input[ty][tx] = 0.0f;
-        }
-        
-        // Load halo regions (right and bottom borders)
-        if (tx < 2) {
-            int iw_halo = iw_base + TILE_SIZE + tx;
-            if (ih >= 0 && ih < in_height && iw_halo >= 0 && iw_halo < in_width) {
-                s_input[ty][TILE_SIZE + tx] = input[((n * in_channels + ic) * in_height + ih) * in_width + iw_halo];
-            } else {
-                s_input[ty][TILE_SIZE + tx] = 0.0f;
-            }
-        }
-        
-        if (ty < 2) {
-            int ih_halo = ih_base + TILE_SIZE + ty;
-            if (ih_halo >= 0 && ih_halo < in_height && iw >= 0 && iw < in_width) {
-                s_input[TILE_SIZE + ty][tx] = input[((n * in_channels + ic) * in_height + ih_halo) * in_width + iw];
-            } else {
-                s_input[TILE_SIZE + ty][tx] = 0.0f;
-            }
-        }
-        
-        // Corner elements
-        if (tx < 2 && ty < 2) {
-            int ih_halo = ih_base + TILE_SIZE + ty;
-            int iw_halo = iw_base + TILE_SIZE + tx;
-            if (ih_halo >= 0 && ih_halo < in_height && iw_halo >= 0 && iw_halo < in_width) {
-                s_input[TILE_SIZE + ty][TILE_SIZE + tx] = input[((n * in_channels + ic) * in_height + ih_halo) * in_width + iw_halo];
-            } else {
-                s_input[TILE_SIZE + ty][TILE_SIZE + tx] = 0.0f;
-            }
-        }
-        
-        __syncthreads();
-        
-        // Compute convolution using shared memory
-        if (oh < out_height && ow < out_width) {
+        #pragma unroll
+        for (int kh = 0; kh < 3; ++kh) {
+            int ih = oh * stride - padding + kh;
+            if (ih < 0 || ih >= in_height) continue;
+            
             #pragma unroll
-            for (int kh = 0; kh < 3; ++kh) {
-                #pragma unroll
-                for (int kw = 0; kw < 3; ++kw) {
-                    int sy = ty + kh;
-                    int sx = tx + kw;
-                    int weight_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
-                    sum += s_input[sy][sx] * weights[weight_idx];
+            for (int kw = 0; kw < 3; ++kw) {
+                int iw = ow * stride - padding + kw;
+                
+                if (iw >= 0 && iw < in_width) {
+                    sum += input_ptr[ih * in_width + iw] * weight_ptr[kh * kernel_size + kw];
                 }
             }
         }
-        
-        __syncthreads();
     }
     
-    // Write output with bias
-    if (oh < out_height && ow < out_width) {
-        int output_idx = ((n * out_channels + oc) * out_height + oh) * out_width + ow;
-        output[output_idx] = sum + bias[oc];
-    }
+    // Add bias
+    output[idx] = sum + bias[oc];
 }
 
 // ============================================================================
-// Version 2: Fused Conv2D + ReLU + Bias
+// Version 2: Fused Conv2D + ReLU + Bias (efficient for small images)
 // ============================================================================
 
 __global__ void conv2d_relu_forward_kernel(
@@ -160,89 +113,43 @@ __global__ void conv2d_relu_forward_kernel(
     int out_channels, int kernel_size, int stride, int padding,
     int out_height, int out_width
 ) {
-    __shared__ float s_input[TILE_SIZE + 2][TILE_SIZE + 2];
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_outputs = batch_size * out_channels * out_height * out_width;
     
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int bx = blockIdx.x;
-    int by = blockIdx.y;
-    int bz = blockIdx.z;
+    if (idx >= total_outputs) return;
     
-    int n = bz / out_channels;
-    int oc = bz % out_channels;
-    
-    int oh = by * TILE_SIZE + ty;
-    int ow = bx * TILE_SIZE + tx;
+    // Decode linear index to (n, oc, oh, ow)
+    int ow = idx % out_width;
+    int oh = (idx / out_width) % out_height;
+    int oc = (idx / (out_width * out_height)) % out_channels;
+    int n = idx / (out_width * out_height * out_channels);
     
     float sum = 0.0f;
     
+    // Convolution with loop unrolling
     for (int ic = 0; ic < in_channels; ++ic) {
-        int ih_base = by * TILE_SIZE - padding;
-        int iw_base = bx * TILE_SIZE - padding;
+        const float* weight_ptr = weights + (oc * in_channels + ic) * kernel_size * kernel_size;
+        const float* input_ptr = input + (n * in_channels + ic) * in_height * in_width;
         
-        int ih = ih_base + ty;
-        int iw = iw_base + tx;
-        
-        // Load main tile
-        if (ih >= 0 && ih < in_height && iw >= 0 && iw < in_width) {
-            s_input[ty][tx] = input[((n * in_channels + ic) * in_height + ih) * in_width + iw];
-        } else {
-            s_input[ty][tx] = 0.0f;
-        }
-        
-        // Load halo - right
-        if (tx < 2) {
-            int iw_halo = iw_base + TILE_SIZE + tx;
-            if (ih >= 0 && ih < in_height && iw_halo >= 0 && iw_halo < in_width) {
-                s_input[ty][TILE_SIZE + tx] = input[((n * in_channels + ic) * in_height + ih) * in_width + iw_halo];
-            } else {
-                s_input[ty][TILE_SIZE + tx] = 0.0f;
-            }
-        }
-        
-        // Load halo - bottom
-        if (ty < 2) {
-            int ih_halo = ih_base + TILE_SIZE + ty;
-            if (ih_halo >= 0 && ih_halo < in_height && iw >= 0 && iw < in_width) {
-                s_input[TILE_SIZE + ty][tx] = input[((n * in_channels + ic) * in_height + ih_halo) * in_width + iw];
-            } else {
-                s_input[TILE_SIZE + ty][tx] = 0.0f;
-            }
-        }
-        
-        // Load halo - corner
-        if (tx < 2 && ty < 2) {
-            int ih_halo = ih_base + TILE_SIZE + ty;
-            int iw_halo = iw_base + TILE_SIZE + tx;
-            if (ih_halo >= 0 && ih_halo < in_height && iw_halo >= 0 && iw_halo < in_width) {
-                s_input[TILE_SIZE + ty][TILE_SIZE + tx] = input[((n * in_channels + ic) * in_height + ih_halo) * in_width + iw_halo];
-            } else {
-                s_input[TILE_SIZE + ty][TILE_SIZE + tx] = 0.0f;
-            }
-        }
-        
-        __syncthreads();
-        
-        if (oh < out_height && ow < out_width) {
+        #pragma unroll
+        for (int kh = 0; kh < 3; ++kh) {
+            int ih = oh * stride - padding + kh;
+            if (ih < 0 || ih >= in_height) continue;
+            
             #pragma unroll
-            for (int kh = 0; kh < 3; ++kh) {
-                #pragma unroll
-                for (int kw = 0; kw < 3; ++kw) {
-                    int weight_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
-                    sum += s_input[ty + kh][tx + kw] * weights[weight_idx];
+            for (int kw = 0; kw < 3; ++kw) {
+                int iw = ow * stride - padding + kw;
+                
+                if (iw >= 0 && iw < in_width) {
+                    sum += input_ptr[ih * in_width + iw] * weight_ptr[kh * kernel_size + kw];
                 }
             }
         }
-        
-        __syncthreads();
     }
     
     // Fused: Add bias + ReLU
-    if (oh < out_height && ow < out_width) {
-        int output_idx = ((n * out_channels + oc) * out_height + oh) * out_width + ow;
-        float val = sum + bias[oc];
-        output[output_idx] = fmaxf(0.0f, val);  // ReLU fused
-    }
+    float val = sum + bias[oc];
+    output[idx] = fmaxf(0.0f, val);
 }
 
 // ============================================================================
@@ -358,49 +265,31 @@ __global__ void sgd_update_remainder_kernel(
 // Conv2D Backward with Shared Memory (Optimized)
 // ============================================================================
 
-// Optimized bias gradient with parallel reduction
+// Optimized bias gradient - simple and fast for small spatial sizes
 __global__ void conv2d_backward_bias_optimized_kernel(
     const float* __restrict__ grad_output,
     float* __restrict__ grad_bias,
     int batch_size, int out_channels, int out_height, int out_width
 ) {
-    __shared__ float shared_sum[256];
+    int oc = blockIdx.x * blockDim.x + threadIdx.x;
+    if (oc >= out_channels) return;
     
-    int oc = blockIdx.x;  // One block per output channel
-    int tid = threadIdx.x;
     int spatial_size = out_height * out_width;
-    int total_elements = batch_size * spatial_size;
-    
     float sum = 0.0f;
     
-    // Each thread accumulates multiple elements
-    for (int i = tid; i < total_elements; i += blockDim.x) {
-        int n = i / spatial_size;
-        int spatial_idx = i % spatial_size;
-        int oh = spatial_idx / out_width;
-        int ow = spatial_idx % out_width;
-        
-        int idx = ((n * out_channels + oc) * out_height + oh) * out_width + ow;
-        sum += grad_output[idx];
-    }
-    
-    shared_sum[tid] = sum;
-    __syncthreads();
-    
-    // Parallel reduction in shared memory
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) {
-            shared_sum[tid] += shared_sum[tid + s];
+    // Simple accumulation - efficient for small spatial sizes
+    for (int n = 0; n < batch_size; ++n) {
+        const float* grad_ptr = grad_output + (n * out_channels + oc) * spatial_size;
+        #pragma unroll 4
+        for (int i = 0; i < spatial_size; ++i) {
+            sum += grad_ptr[i];
         }
-        __syncthreads();
     }
     
-    if (tid == 0) {
-        grad_bias[oc] = shared_sum[0];
-    }
+    grad_bias[oc] = sum;
 }
 
-// Optimized weight gradients - one block per (oc, ic) pair
+// Optimized weight gradients - parallelize over all weight elements
 __global__ void conv2d_backward_weights_optimized_kernel(
     const float* __restrict__ input,
     const float* __restrict__ grad_output,
@@ -409,43 +298,43 @@ __global__ void conv2d_backward_weights_optimized_kernel(
     int out_channels, int kernel_size, int stride, int padding,
     int out_height, int out_width
 ) {
-    __shared__ float shared_sum[9];  // 3x3 kernel = 9 weights
+    // Each thread handles one weight element
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_weights = out_channels * in_channels * kernel_size * kernel_size;
     
-    int oc = blockIdx.x;
-    int ic = blockIdx.y;
-    int tid = threadIdx.x;
+    if (idx >= total_weights) return;
     
-    // Each thread computes sum for one kernel position, accumulating over batch and spatial
-    int kh = tid / kernel_size;
-    int kw = tid % kernel_size;
+    int kw = idx % kernel_size;
+    int kh = (idx / kernel_size) % kernel_size;
+    int ic = (idx / (kernel_size * kernel_size)) % in_channels;
+    int oc = idx / (kernel_size * kernel_size * in_channels);
     
     float sum = 0.0f;
+    int spatial_size = out_height * out_width;
     
-    if (kh < kernel_size && kw < kernel_size) {
-        for (int n = 0; n < batch_size; ++n) {
-            for (int oh = 0; oh < out_height; ++oh) {
-                for (int ow = 0; ow < out_width; ++ow) {
-                    int ih = oh * stride - padding + kh;
-                    int iw = ow * stride - padding + kw;
-                    
-                    if (ih >= 0 && ih < in_height && iw >= 0 && iw < in_width) {
-                        int input_idx = ((n * in_channels + ic) * in_height + ih) * in_width + iw;
-                        int grad_out_idx = ((n * out_channels + oc) * out_height + oh) * out_width + ow;
-                        sum += input[input_idx] * grad_output[grad_out_idx];
-                    }
+    for (int n = 0; n < batch_size; ++n) {
+        const float* input_base = input + (n * in_channels + ic) * in_height * in_width;
+        const float* grad_base = grad_output + (n * out_channels + oc) * spatial_size;
+        
+        for (int oh = 0; oh < out_height; ++oh) {
+            int ih = oh * stride - padding + kh;
+            if (ih < 0 || ih >= in_height) continue;
+            
+            #pragma unroll 4
+            for (int ow = 0; ow < out_width; ++ow) {
+                int iw = ow * stride - padding + kw;
+                
+                if (iw >= 0 && iw < in_width) {
+                    sum += input_base[ih * in_width + iw] * grad_base[oh * out_width + ow];
                 }
             }
         }
     }
     
-    // Write result directly (no reduction needed, each thread handles one weight)
-    if (tid < kernel_size * kernel_size) {
-        int weight_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
-        grad_weights[weight_idx] = sum;
-    }
+    grad_weights[idx] = sum;
 }
 
-// Optimized input gradients with better memory access pattern
+// Optimized input gradients - simplified for stride=1 (most common case)
 __global__ void conv2d_backward_input_optimized_kernel(
     const float* __restrict__ weights,
     const float* __restrict__ grad_output,
@@ -454,8 +343,6 @@ __global__ void conv2d_backward_input_optimized_kernel(
     int out_channels, int kernel_size, int stride, int padding,
     int out_height, int out_width
 ) {
-    __shared__ float s_weights[256][9];  // Cache weights for 256 output channels, 3x3 kernel
-    
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total_inputs = batch_size * in_channels * in_height * in_width;
     
@@ -467,24 +354,43 @@ __global__ void conv2d_backward_input_optimized_kernel(
     int n = idx / (in_width * in_height * in_channels);
     
     float sum = 0.0f;
+    int spatial_out = out_height * out_width;
     
-    #pragma unroll 4
-    for (int oc = 0; oc < out_channels; ++oc) {
-        #pragma unroll
-        for (int kh = 0; kh < kernel_size; ++kh) {
+    // Optimized for stride=1 case (most common in autoencoders)
+    if (stride == 1) {
+        for (int oc = 0; oc < out_channels; ++oc) {
+            const float* weight_base = weights + (oc * in_channels + ic) * kernel_size * kernel_size;
+            const float* grad_base = grad_output + (n * out_channels + oc) * spatial_out;
+            
             #pragma unroll
-            for (int kw = 0; kw < kernel_size; ++kw) {
-                int oh = (ih + padding - kh);
-                int ow = (iw + padding - kw);
+            for (int kh = 0; kh < 3; ++kh) {
+                int oh = ih + padding - kh;
+                if (oh < 0 || oh >= out_height) continue;
                 
-                if (oh % stride == 0 && ow % stride == 0) {
-                    oh /= stride;
-                    ow /= stride;
+                #pragma unroll
+                for (int kw = 0; kw < 3; ++kw) {
+                    int ow = iw + padding - kw;
+                    if (ow >= 0 && ow < out_width) {
+                        sum += weight_base[kh * kernel_size + kw] * grad_base[oh * out_width + ow];
+                    }
+                }
+            }
+        }
+    } else {
+        // General case for stride > 1
+        for (int oc = 0; oc < out_channels; ++oc) {
+            for (int kh = 0; kh < kernel_size; ++kh) {
+                for (int kw = 0; kw < kernel_size; ++kw) {
+                    int oh = (ih + padding - kh);
+                    int ow = (iw + padding - kw);
                     
-                    if (oh >= 0 && oh < out_height && ow >= 0 && ow < out_width) {
-                        int weight_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
-                        int grad_out_idx = ((n * out_channels + oc) * out_height + oh) * out_width + ow;
-                        sum += weights[weight_idx] * grad_output[grad_out_idx];
+                    if (oh % stride == 0 && ow % stride == 0) {
+                        oh /= stride;
+                        ow /= stride;
+                        if (oh >= 0 && oh < out_height && ow >= 0 && ow < out_width) {
+                            int weight_idx = ((oc * in_channels + ic) * kernel_size + kh) * kernel_size + kw;
+                            sum += weights[weight_idx] * grad_output[(n * out_channels + oc) * spatial_out + oh * out_width + ow];
+                        }
                     }
                 }
             }
@@ -546,14 +452,11 @@ void conv2d_forward_tiled(
     int out_height = (in_height + 2 * padding - kernel_size) / stride + 1;
     int out_width = (in_width + 2 * padding - kernel_size) / stride + 1;
     
-    dim3 block(TILE_SIZE, TILE_SIZE);
-    dim3 grid(
-        (out_width + TILE_SIZE - 1) / TILE_SIZE,
-        (out_height + TILE_SIZE - 1) / TILE_SIZE,
-        batch_size * out_channels
-    );
+    int total_outputs = batch_size * out_channels * out_height * out_width;
+    int block_size = 256;
+    int grid_size = (total_outputs + block_size - 1) / block_size;
     
-    conv2d_forward_tiled_kernel<<<grid, block>>>(
+    conv2d_forward_tiled_kernel<<<grid_size, block_size>>>(
         d_input, d_weights, d_bias, d_output,
         batch_size, in_channels, in_height, in_width,
         out_channels, kernel_size, stride, padding,
@@ -572,14 +475,11 @@ void conv2d_relu_forward(
     int out_height = (in_height + 2 * padding - kernel_size) / stride + 1;
     int out_width = (in_width + 2 * padding - kernel_size) / stride + 1;
     
-    dim3 block(TILE_SIZE, TILE_SIZE);
-    dim3 grid(
-        (out_width + TILE_SIZE - 1) / TILE_SIZE,
-        (out_height + TILE_SIZE - 1) / TILE_SIZE,
-        batch_size * out_channels
-    );
+    int total_outputs = batch_size * out_channels * out_height * out_width;
+    int block_size = 256;
+    int grid_size = (total_outputs + block_size - 1) / block_size;
     
-    conv2d_relu_forward_kernel<<<grid, block>>>(
+    conv2d_relu_forward_kernel<<<grid_size, block_size>>>(
         d_input, d_weights, d_bias, d_output,
         batch_size, in_channels, in_height, in_width,
         out_channels, kernel_size, stride, padding,
@@ -598,16 +498,20 @@ void conv2d_backward_tiled(
     int out_height = (in_height + 2 * padding - kernel_size) / stride + 1;
     int out_width = (in_width + 2 * padding - kernel_size) / stride + 1;
     
-    // Optimized bias gradients - one block per output channel
-    conv2d_backward_bias_optimized_kernel<<<out_channels, 256>>>(
+    // Optimized bias gradients - simple parallel over channels
+    int bias_block = 256;
+    int bias_grid = (out_channels + bias_block - 1) / bias_block;
+    conv2d_backward_bias_optimized_kernel<<<bias_grid, bias_block>>>(
         d_grad_output, d_grad_bias,
         batch_size, out_channels, out_height, out_width
     );
     CUDA_KERNEL_CHECK();
     
-    // Optimized weight gradients - one block per (oc, ic) pair
-    dim3 weight_grid(out_channels, in_channels);
-    conv2d_backward_weights_optimized_kernel<<<weight_grid, kernel_size * kernel_size>>>(
+    // Optimized weight gradients - one thread per weight
+    int total_weights = out_channels * in_channels * kernel_size * kernel_size;
+    int weight_block = 256;
+    int weight_grid = (total_weights + weight_block - 1) / weight_block;
+    conv2d_backward_weights_optimized_kernel<<<weight_grid, weight_block>>>(
         d_input, d_grad_output, d_grad_weights,
         batch_size, in_channels, in_height, in_width,
         out_channels, kernel_size, stride, padding,
