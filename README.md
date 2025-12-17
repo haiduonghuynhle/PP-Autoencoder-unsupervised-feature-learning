@@ -102,11 +102,11 @@ python gradio_demo.py --autoencoder models/autoencoder_gpu.bin --svm models/svm_
 
 ## Measured performance notes (from logs)
 - CPU per-epoch time (2% data): ~1,030s
-- GPU Basic per-epoch time (2% data): ~95s (≈10.8×)
-- GPU Opt V1 per-epoch time (2% data): ~49.8s (≈20.7×)
-- GPU Opt V2 per-epoch time (2% data): ~34.7s (≈29.7×)
+- GPU Basic per-epoch time: ~95s (≈10.8×)
+- GPU Opt V1 per-epoch time: ~49.8s (≈20.7×)
+- GPU Opt V2 per-epoch time: ~34.7s (≈29.7×)
 - Feature extraction (full dataset on GPU opt v2): 7.41s total (train+test)
-- Classification accuracy (SVM on extracted features): ≈62% (as reported in notebook)
+- Classification accuracy (SVM on extracted features): ≈67% (as reported in notebook)
 
 ## Notes & tips
 - If you run on a different GPU, update the `sm_xx` architecture in the `Makefile` before compiling.
