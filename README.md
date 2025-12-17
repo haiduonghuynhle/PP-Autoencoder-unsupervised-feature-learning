@@ -112,3 +112,28 @@ python gradio_demo.py --autoencoder models/autoencoder_gpu.bin --svm models/svm_
 - If you run on a different GPU, update the `sm_xx` architecture in the `Makefile` before compiling.
 - For fast H2D copies, use pinned host memory and set appropriate CUDA stream usage (v2 opt).
 - Save and keep the `models/` outputs; `*.bin` weights are used by the notebook for visualization and SVM training.
+
+## Pretrained model
+
+If you want to skip training and use a pretrained model, download the provided weights and place them in the `models/` directory.
+
+Pretrained model (Google Drive):
+
+https://drive.google.com/file/d/1A1CHdGLMx0ohzwS1Lwp8xFl4H25Lh2hf/view?usp=sharing
+
+Download instructions (example using `wget` + `gdown`):
+
+```bash
+# using gdown (recommended for Google Drive links)
+pip install gdown
+gdown --id 1A1CHdGLMx0ohzwS1Lwp8xFl4H25Lh2hf -O models/autoencoder_pretrained.bin
+
+# or using your browser: download and move the file to `models/`:
+# mv ~/Downloads/autoencoder_pretrained.bin models/
+```
+
+After placing the file in `models/`, you can run the demo using the downloaded model. For example:
+
+```bash
+python gradio_demo.py --autoencoder models/autoencoder_pretrained.bin --svm models/svm_cuml_model_gpu.pkl --share
+```
