@@ -117,9 +117,7 @@ python gradio_demo.py --autoencoder models/autoencoder_gpu.bin --svm models/svm_
 
 If you want to skip training and use a pretrained model, download the provided weights and place them in the `models/` directory.
 
-Pretrained model (Google Drive):
-
-https://drive.google.com/file/d/1A1CHdGLMx0ohzwS1Lwp8xFl4H25Lh2hf/view?usp=sharing
+Pretrained model [Google Drive](https://drive.google.com/drive/folders/1-CMgUYIaAk7DXq3R6uNtfg9G3CRhXQw2?usp=sharing)
 
 Download instructions (example using `wget` + `gdown`):
 
