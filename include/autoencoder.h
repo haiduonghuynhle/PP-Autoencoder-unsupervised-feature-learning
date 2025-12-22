@@ -206,13 +206,15 @@ public:
     void initialize_from_cpu(const CPUAutoencoder& cpu_ae, int batch_sz);
     
     // Copy input to device and run forward pass
-    float forward(const float* h_input, float* h_output = nullptr);
+    // Optional output pointers receive timings in milliseconds for memcpy and compute (can be nullptr)
+    float forward(const float* h_input, float* h_output = nullptr, float* out_memcpy_ms = nullptr, float* out_compute_ms = nullptr);
     
     // Encoder only (for feature extraction)
     void encode(const float* h_input, float* h_features);
     
     // Backward pass (input should already be on device from forward)
-    void backward(const float* h_target);
+    // Optional output pointer receives timing in milliseconds for compute (can be nullptr)
+    void backward(const float* h_target, float* out_compute_ms = nullptr);
     
     // Update weights
     void update_weights(float learning_rate);

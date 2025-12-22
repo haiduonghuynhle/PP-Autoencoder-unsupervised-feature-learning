@@ -379,9 +379,20 @@ void GPUAutoencoder::initialize(int batch_sz, unsigned int seed) {
     std::cout << "GPU Autoencoder initialized with batch size " << batch_size << std::endl;
 }
 
-float GPUAutoencoder::forward(const float* h_input, float* h_output_ptr) {
+float GPUAutoencoder::forward(const float* h_input, float* h_output_ptr, float* out_memcpy_ms, float* out_compute_ms) {
+    // Timing events
+    cudaEvent_t h2d_start, h2d_end, comp_start, comp_end, d2h_start, d2h_end;
+    CUDA_CHECK(cudaEventCreate(&h2d_start));
+    CUDA_CHECK(cudaEventCreate(&h2d_end));
+    CUDA_CHECK(cudaEventCreate(&comp_start));
+    CUDA_CHECK(cudaEventCreate(&comp_end));
+    CUDA_CHECK(cudaEventCreate(&d2h_start));
+    CUDA_CHECK(cudaEventCreate(&d2h_end));
+
     // Copy input to device (single copy - target is same as input for autoencoder)
+    CUDA_CHECK(cudaEventRecord(h2d_start));
     CUDA_CHECK(cudaMemcpy(d_input, h_input, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaEventRecord(h2d_end));
     // Use device-to-device copy for target (much faster than host-to-device)
     CUDA_CHECK(cudaMemcpy(d_target, d_input, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyDeviceToDevice));
     
@@ -445,13 +456,37 @@ float GPUAutoencoder::forward(const float* h_input, float* h_output_ptr) {
                             batch_size, 256, 32, 32, 3, 3, 1, 1);
     }
     
-    // Copy output to host if requested
-    if (h_output_ptr != nullptr) {
-        CUDA_CHECK(cudaMemcpy(h_output_ptr, d_dec_conv3_out, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyDeviceToHost));
-    }
-    
     // Compute loss
-    return gpu::mse_loss_forward(d_dec_conv3_out, d_target, batch_size * 3 * 32 * 32);
+    CUDA_CHECK(cudaEventRecord(comp_start));
+    float loss = gpu::mse_loss_forward(d_dec_conv3_out, d_target, batch_size * 3 * 32 * 32);
+    // Compute gradient for backward pass
+    gpu::mse_loss_backward(d_dec_conv3_out, d_target, d_grad_output, batch_size * 3 * 32 * 32);
+    CUDA_CHECK(cudaEventRecord(comp_end));
+
+    // Copy output to host if requested (measure d2h)
+    float h2d_ms = 0.0f, d2h_ms = 0.0f, compute_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&h2d_ms, h2d_start, h2d_end));
+    if (h_output_ptr != nullptr) {
+        CUDA_CHECK(cudaEventRecord(d2h_start));
+        CUDA_CHECK(cudaMemcpy(h_output_ptr, d_dec_conv3_out, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaEventRecord(d2h_end));
+        CUDA_CHECK(cudaEventSynchronize(d2h_end));
+        CUDA_CHECK(cudaEventElapsedTime(&d2h_ms, d2h_start, d2h_end));
+    }
+    CUDA_CHECK(cudaEventSynchronize(comp_end));
+    CUDA_CHECK(cudaEventElapsedTime(&compute_ms, comp_start, comp_end));
+
+    if (out_memcpy_ms) *out_memcpy_ms = h2d_ms + d2h_ms;
+    if (out_compute_ms) *out_compute_ms = compute_ms;
+
+    CUDA_CHECK(cudaEventDestroy(h2d_start));
+    CUDA_CHECK(cudaEventDestroy(h2d_end));
+    CUDA_CHECK(cudaEventDestroy(comp_start));
+    CUDA_CHECK(cudaEventDestroy(comp_end));
+    CUDA_CHECK(cudaEventDestroy(d2h_start));
+    CUDA_CHECK(cudaEventDestroy(d2h_end));
+
+    return loss;
 }
 
 void GPUAutoencoder::encode(const float* h_input, float* h_features) {
@@ -487,9 +522,20 @@ void GPUAutoencoder::encode(const float* h_input, float* h_features) {
     CUDA_CHECK(cudaMemcpy(h_features, d_enc_pool2_out, batch_size * Constants::FEATURE_DIM * sizeof(float), cudaMemcpyDeviceToHost));
 }
 
-void GPUAutoencoder::backward(const float* h_target) {
+void GPUAutoencoder::backward(const float* h_target, float* out_compute_ms) {
     zero_gradients();
-    
+
+    // If a host target is provided, copy it to device (not timed here)
+    if (h_target != nullptr) {
+        CUDA_CHECK(cudaMemcpy(d_target, h_target, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyHostToDevice));
+    }
+
+    // Timing for backward compute
+    cudaEvent_t comp_start, comp_end;
+    CUDA_CHECK(cudaEventCreate(&comp_start));
+    CUDA_CHECK(cudaEventCreate(&comp_end));
+    CUDA_CHECK(cudaEventRecord(comp_start));
+
     // MSE loss backward
     gpu::mse_loss_backward(d_dec_conv3_out, d_target, d_grad_dec_conv3_out, batch_size * 3 * 32 * 32);
     
@@ -622,6 +668,14 @@ void GPUAutoencoder::backward(const float* h_target) {
                              batch_size, 3, 32, 32, 256, 3, 1, 1);
         cudaFree(d_dummy_grad_input);
     }
+
+    CUDA_CHECK(cudaEventRecord(comp_end));
+    CUDA_CHECK(cudaEventSynchronize(comp_end));
+    float compute_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&compute_ms, comp_start, comp_end));
+    if (out_compute_ms) *out_compute_ms = compute_ms;
+    CUDA_CHECK(cudaEventDestroy(comp_start));
+    CUDA_CHECK(cudaEventDestroy(comp_end));
 }
 
 void GPUAutoencoder::update_weights(float learning_rate) {
@@ -1038,6 +1092,12 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
+        double epoch_memcpy_ms = 0.0; // total memcpy time (ms)
+        double epoch_fwd_compute_ms = 0.0; // total forward compute time (ms)
+        double epoch_bwd_compute_ms = 0.0; // total backward compute time (ms)
+        double epoch_memcpy_ms = 0.0; // total memcpy time (ms)
+        double epoch_fwd_compute_ms = 0.0; // total forward compute time (ms)
+        double epoch_bwd_compute_ms = 0.0; // total backward compute time (ms)
         
         std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << "..." << std::endl;
         
@@ -1048,11 +1108,17 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
                 continue;
             }
             
-            // Forward pass
-            float loss = autoencoder.forward(batch_images, nullptr);
-            
-            // Backward pass
-            autoencoder.backward(batch_images);
+            // Forward pass (capture memcpy and compute times)
+            float batch_memcpy_ms = 0.0f;
+            float batch_fwd_compute_ms = 0.0f;
+            float loss = autoencoder.forward(batch_images, nullptr, &batch_memcpy_ms, &batch_fwd_compute_ms);
+            epoch_memcpy_ms += batch_memcpy_ms;
+            epoch_fwd_compute_ms += batch_fwd_compute_ms;
+
+            // Backward pass (capture compute time)
+            float batch_bwd_compute_ms = 0.0f;
+            autoencoder.backward(batch_images, &batch_bwd_compute_ms);
+            epoch_bwd_compute_ms += batch_bwd_compute_ms;
             
             // Update weights
             autoencoder.update_weights(config.learning_rate);
@@ -1077,8 +1143,11 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         
         std::cout << std::endl;
         std::cout << "Epoch " << epoch + 1 << "/" << config.epochs 
-                  << " - Loss: " << epoch_loss 
-                  << " - Time: " << epoch_time << "s" << std::endl;
+              << " - Loss: " << epoch_loss 
+              << " - Time: " << epoch_time << "s";
+        std::cout << " (memcpy: " << std::fixed << std::setprecision(1) << epoch_memcpy_ms << " ms, ";
+        std::cout << "fwrd compute: " << std::fixed << std::setprecision(1) << epoch_fwd_compute_ms << " ms, ";
+        std::cout << "bwd compute: " << std::fixed << std::setprecision(1) << epoch_bwd_compute_ms << " ms)" << std::endl;
     }
     
     stats.total_time = total_timer.elapsed();
@@ -1203,8 +1272,15 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
                 continue;
             }
             
-            float loss = autoencoder.forward(batch_images, nullptr);
-            autoencoder.backward(batch_images);
+            float batch_memcpy_ms = 0.0f;
+            float batch_fwd_compute_ms = 0.0f;
+            float loss = autoencoder.forward(batch_images, nullptr, &batch_memcpy_ms, &batch_fwd_compute_ms);
+            epoch_memcpy_ms += batch_memcpy_ms;
+            epoch_fwd_compute_ms += batch_fwd_compute_ms;
+
+            float batch_bwd_compute_ms = 0.0f;
+            autoencoder.backward(batch_images, &batch_bwd_compute_ms);
+            epoch_bwd_compute_ms += batch_bwd_compute_ms;
             autoencoder.update_weights(config.learning_rate);
             
             epoch_loss += loss;
@@ -1227,8 +1303,11 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
         
         std::cout << std::endl;
         std::cout << "Epoch " << epoch + 1 << "/" << config.epochs 
-                  << " - Loss: " << epoch_loss 
-                  << " - Time: " << epoch_time << "s" << std::endl;
+              << " - Loss: " << epoch_loss 
+              << " - Time: " << epoch_time << "s";
+        std::cout << " (memcpy: " << std::fixed << std::setprecision(1) << epoch_memcpy_ms << " ms, ";
+        std::cout << "fwrd compute: " << std::fixed << std::setprecision(1) << epoch_fwd_compute_ms << " ms, ";
+        std::cout << "bwd compute: " << std::fixed << std::setprecision(1) << epoch_bwd_compute_ms << " ms)" << std::endl;
     }
     
     stats.total_time = total_timer.elapsed();

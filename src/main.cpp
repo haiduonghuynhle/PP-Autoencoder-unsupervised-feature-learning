@@ -109,6 +109,8 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
+        double epoch_forward_ms = 0.0; // CPU forward time (ms)
+        double epoch_backward_ms = 0.0; // CPU backward time (ms)
         
         std::cout << "Starting epoch " << epoch + 1 << "..." << std::endl;
         
@@ -122,10 +124,16 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
             
             // Forward pass
             Timer batch_timer("Batch");
+            Timer t_forward("Forward");
             float loss = autoencoder.forward(batch_images, nullptr);
-            
+            double batch_forward_ms = t_forward.elapsed() * 1000.0;
+            epoch_forward_ms += batch_forward_ms;
+
             // Backward pass
+            Timer t_backward("Backward");
             autoencoder.backward(batch_images);
+            double batch_backward_ms = t_backward.elapsed() * 1000.0;
+            epoch_backward_ms += batch_backward_ms;
             
             // Update weights
             autoencoder.update_weights(config.learning_rate);
@@ -153,8 +161,10 @@ void train_cpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         
         std::cout << std::endl;
         std::cout << "Epoch " << epoch + 1 << "/" << config.epochs 
-                  << " - Loss: " << epoch_loss 
-                  << " - Time: " << epoch_time << "s" << std::endl;
+              << " - Loss: " << epoch_loss 
+              << " - Time: " << epoch_time << "s";
+        std::cout << " (CPU forward: " << std::fixed << std::setprecision(1) << (epoch_forward_ms) << " ms, ";
+        std::cout << "backward: " << std::fixed << std::setprecision(1) << (epoch_backward_ms) << " ms)" << std::endl;
     }
     
     stats.total_time = total_timer.elapsed();
