@@ -1467,6 +1467,10 @@ void train_gpu_optimized_v2(CIFAR10Dataset& dataset, const TrainingConfig& confi
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
+        // Timing variables for this epoch
+        double epoch_memcpy_ms = 0.0;
+        double epoch_fwd_compute_ms = 0.0;
+        double epoch_bwd_compute_ms = 0.0;
         
         std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << " (with streams)..." << std::endl;
         
@@ -1482,33 +1486,71 @@ void train_gpu_optimized_v2(CIFAR10Dataset& dataset, const TrainingConfig& confi
         }
         
         while (has_current && current_batch_size == config.batch_size) {
-            // Start async copy of current batch to GPU
+            // Measure H2D memcpy on transfer stream
+            cudaEvent_t ev_h2d_start, ev_h2d_end;
+            CUDA_CHECK(cudaEventCreate(&ev_h2d_start));
+            CUDA_CHECK(cudaEventCreate(&ev_h2d_end));
+            CUDA_CHECK(cudaEventRecord(ev_h2d_start, stream_transfer));
             autoencoder.copy_input_async(current_buffer, stream_transfer);
-            
+            CUDA_CHECK(cudaEventRecord(ev_h2d_end, stream_transfer));
+            CUDA_CHECK(cudaEventSynchronize(ev_h2d_end));
+            float batch_memcpy_ms = 0.0f;
+            CUDA_CHECK(cudaEventElapsedTime(&batch_memcpy_ms, ev_h2d_start, ev_h2d_end));
+            epoch_memcpy_ms += batch_memcpy_ms;
+            CUDA_CHECK(cudaEventDestroy(ev_h2d_start));
+            CUDA_CHECK(cudaEventDestroy(ev_h2d_end));
+
             // While GPU is receiving data, prepare next batch on CPU
             bool has_next = batch_gen.has_next();
             int next_batch_size = 0;
             if (has_next) {
                 next_batch_size = batch_gen.next_batch(next_buffer);
             }
-            
-            // Run forward (waits for transfer to complete internally)
+
+            // Ensure compute stream waits for transfer to finish
+            cudaEvent_t ev_transfer_done;
+            CUDA_CHECK(cudaEventCreate(&ev_transfer_done));
+            CUDA_CHECK(cudaEventRecord(ev_transfer_done, stream_transfer));
+            CUDA_CHECK(cudaStreamWaitEvent(stream_compute, ev_transfer_done, 0));
+            CUDA_CHECK(cudaEventDestroy(ev_transfer_done));
+
+            // Measure forward compute on default stream
+            cudaEvent_t ev_fwd_start, ev_fwd_end;
+            CUDA_CHECK(cudaEventCreate(&ev_fwd_start));
+            CUDA_CHECK(cudaEventCreate(&ev_fwd_end));
+            CUDA_CHECK(cudaEventRecord(ev_fwd_start, 0));
             float loss = autoencoder.forward_async(stream_compute);
-            
-            // Run backward
+            CUDA_CHECK(cudaEventRecord(ev_fwd_end, 0));
+            CUDA_CHECK(cudaEventSynchronize(ev_fwd_end));
+            float batch_fwd_ms = 0.0f;
+            CUDA_CHECK(cudaEventElapsedTime(&batch_fwd_ms, ev_fwd_start, ev_fwd_end));
+            epoch_fwd_compute_ms += batch_fwd_ms;
+            CUDA_CHECK(cudaEventDestroy(ev_fwd_start));
+            CUDA_CHECK(cudaEventDestroy(ev_fwd_end));
+
+            // Measure backward+update on default stream
+            cudaEvent_t ev_bwd_start, ev_bwd_end;
+            CUDA_CHECK(cudaEventCreate(&ev_bwd_start));
+            CUDA_CHECK(cudaEventCreate(&ev_bwd_end));
+            CUDA_CHECK(cudaEventRecord(ev_bwd_start, 0));
             autoencoder.backward_async(stream_compute);
-            
-            // Update weights
             autoencoder.update_weights_async(config.learning_rate, stream_compute);
-            
+            CUDA_CHECK(cudaEventRecord(ev_bwd_end, 0));
+            CUDA_CHECK(cudaEventSynchronize(ev_bwd_end));
+            float batch_bwd_ms = 0.0f;
+            CUDA_CHECK(cudaEventElapsedTime(&batch_bwd_ms, ev_bwd_start, ev_bwd_end));
+            epoch_bwd_compute_ms += batch_bwd_ms;
+            CUDA_CHECK(cudaEventDestroy(ev_bwd_start));
+            CUDA_CHECK(cudaEventDestroy(ev_bwd_end));
+
             epoch_loss += loss;
             num_batches++;
             batch_idx++;
-            
+
             if (batch_idx % config.print_every == 0) {
                 print_progress(batch_idx, batch_gen.num_batches(), epoch_loss / num_batches);
             }
-            
+
             // Swap buffers for next iteration
             std::swap(current_buffer, next_buffer);
             has_current = has_next;
@@ -1520,14 +1562,17 @@ void train_gpu_optimized_v2(CIFAR10Dataset& dataset, const TrainingConfig& confi
         
         epoch_loss /= num_batches;
         double epoch_time = epoch_timer.elapsed();
-        
+
         stats.epoch_losses.push_back(epoch_loss);
         stats.epoch_times.push_back(epoch_time);
-        
+
         std::cout << std::endl;
-        std::cout << "Epoch " << epoch + 1 << "/" << config.epochs 
-                  << " - Loss: " << epoch_loss 
-                  << " - Time: " << epoch_time << "s" << std::endl;
+        std::cout << "Epoch " << epoch + 1 << "/" << config.epochs
+              << " - Loss: " << epoch_loss
+              << " - Time: " << epoch_time << "s";
+        std::cout << " (memcpy: " << std::fixed << std::setprecision(1) << epoch_memcpy_ms << " ms, ";
+        std::cout << "fwrd compute: " << std::fixed << std::setprecision(1) << epoch_fwd_compute_ms << " ms, ";
+        std::cout << "bwd compute: " << std::fixed << std::setprecision(1) << epoch_bwd_compute_ms << " ms)" << std::endl;
     }
     
     stats.total_time = total_timer.elapsed();
