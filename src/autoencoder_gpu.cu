@@ -1092,12 +1092,9 @@ void train_gpu(CIFAR10Dataset& dataset, const TrainingConfig& config, TrainingSt
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
-        double epoch_memcpy_ms = 0.0; // total memcpy time (ms)
-        double epoch_fwd_compute_ms = 0.0; // total forward compute time (ms)
-        double epoch_bwd_compute_ms = 0.0; // total backward compute time (ms)
-        double epoch_memcpy_ms = 0.0; // total memcpy time (ms)
-        double epoch_fwd_compute_ms = 0.0; // total forward compute time (ms)
-        double epoch_bwd_compute_ms = 0.0; // total backward compute time (ms)
+        double epoch_memcpy_ms = 0.0;
+        double epoch_fwd_compute_ms = 0.0;
+        double epoch_bwd_compute_ms = 0.0;
         
         std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << "..." << std::endl;
         
@@ -1258,11 +1255,16 @@ void train_gpu_optimized(CIFAR10Dataset& dataset, const TrainingConfig& config, 
     for (int epoch = 0; epoch < config.epochs; ++epoch) {
         Timer epoch_timer("Epoch");
         batch_gen.reset(true);
-        
+
         float epoch_loss = 0.0f;
         int num_batches = 0;
         int batch_idx = 0;
-        
+
+        // Timing variables for this epoch
+        double epoch_memcpy_ms = 0.0;
+        double epoch_fwd_compute_ms = 0.0;
+        double epoch_bwd_compute_ms = 0.0;
+
         std::cout << "Starting epoch " << epoch + 1 << "/" << config.epochs << "..." << std::endl;
         
         while (batch_gen.has_next()) {

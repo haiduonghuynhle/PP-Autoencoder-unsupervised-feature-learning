@@ -59,8 +59,7 @@ __global__ void conv2d_forward_tiled_kernel(
     int out_channels, int kernel_size, int stride, int padding,
     int out_height, int out_width
 ) {
-    // Cache weights in shared memory (reused across all threads in block)
-    __shared__ float s_weights[9];  // 3x3 kernel
+    // (weight caching via shared memory was considered but not used here)
     
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total_outputs = batch_size * out_channels * out_height * out_width;
