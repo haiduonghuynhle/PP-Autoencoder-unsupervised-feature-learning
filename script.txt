@@ -3,94 +3,66 @@ KỊCH BẢN VIDEO THUYẾT MINH - CSC14120 FINAL PROJECT
 CUDA Autoencoder for CIFAR-10 Feature Learning
 Thời lượng: 15-20 phút
 
-LƯU Ý: Script này được viết để trình bày notebook CSC14120_Final_Report_v5.ipynb
+LƯU Ý: Script này được viết để trình bày notebook CSC14120_Final_Report.ipynb
 Mỗi phần có timing cụ thể và hướng dẫn chi tiết cho từng cell
 ================================================================================
 
 TÓM TẮT CẤU TRÚC VIDEO:
 -----------------------
 PHẦN 1: Problem Overview (2-3 phút)
-  - Cell 1-5: Giới thiệu, problem statement, motivation, dataset, architecture
+  - Cell 1-2: Giới thiệu, problem statement, motivation, dataset, architecture
 
 PHẦN 2: Live Demonstration (5-7 phút)  
-  - Cell 6-12: Compilation, CPU baseline, GPU versions, feature extraction, SVM
+  - Cell 3-7: Project initialization, CPU baseline, GPU basic, GPU optimized v1, GPU optimized v2, SVM
 
 PHẦN 3: Performance Analysis (5-7 phút)
-  - Cell 13-17: Performance comparison, loss analysis, classification, memory
+  - Cell 8-11: Performance comparison, loss analysis, classification, feature extraction performance
 
-PHẦN 4: Lessons Learned (3-5 phút)
-  - Cell 18-20: Technical insights, challenges, conclusion
+PHẦN 4: Lessons Learned & Conclusion (3-5 phút)
+  - Cell 12-15: Technical insights, challenges, conclusion và future work
 
-TỔNG CỘNG: ~15-20 phút
+TỔNG CỘNG: ~15-20 phút (17 code cells)
 
 TIMING BREAKDOWN CHI TIẾT:
 --------------------------
 Phần 1 (2-3 phút):
-  - Cell 1: 15 giây (giới thiệu)
-  - Cell 2: 30 giây (problem statement)
-  - Cell 3: 30 giây (motivation)
-  - Cell 4: 45 giây (setup + visualization)
-  - Cell 5: 30 giây (architecture)
-  → Tổng: ~2.5 phút
+  - Cell 1: 45 giây (setup + CIFAR-10 visualization + giới thiệu)
+  - Cell 2: 90 giây (problem statement, motivation, architecture overview)
+  → Tổng: ~2.25 phút
 
 Phần 2 (5-7 phút):
-  - Cell 6: 30 giây (compilation)
-  - Cell 7: 45 giây (CPU baseline - có thể skip nếu lâu)
-  - Cell 8: 60 giây (GPU basic)
-  - Cell 9: 60 giây (GPU opt v1)
-  - Cell 10: 60 giây (GPU opt v2)
-  - Cell 11: 30 giây (feature extraction)
-  - Cell 12: 30 giây (SVM training)
-  → Tổng: ~6 phút
+  - Cell 3: 60 giây (project initialization + compilation)
+  - Cell 4: 60 giây (CPU baseline - có thể skip nếu lâu)
+  - Cell 5: 60 giây (GPU basic)
+  - Cell 6: 60 giây (GPU optimized v1)
+  - Cell 7: 60 giây (GPU optimized v2 + SVM integration)
+  → Tổng: ~5 phút
 
 Phần 3 (5-7 phút):
-  - Cell 13: 90 giây (performance comparison - nhiều charts)
-  - Cell 14: 60 giây (loss analysis)
-  - Cell 15: 90 giây (classification performance - nhiều charts)
-  - Cell 16: 45 giây (feature extraction performance)
-  - Cell 17: 30 giây (memory usage)
-  → Tổng: ~6 phút
+  - Cell 8: 90 giây (performance comparison overview - nhiều charts)
+  - Cell 9: 60 giây (training loss analysis)
+  - Cell 10: 90 giây (classification performance - nhiều charts)
+  - Cell 11: 60 giây (feature extraction và SVM training performance)
+  → Tổng: ~5 phút
 
 Phần 4 (3-5 phút):
-  - Cell 18: 60 giây (technical insights)
-  - Cell 19: 90 giây (challenges và solutions)
-  - Cell 20: 60 giây (conclusion và future work)
-  → Tổng: ~3.5 phút
+  - Cell 12: 60 giây (key technical insights)
+  - Cell 13: 90 giây (major challenges và solutions)
+  - Cell 14-15: 90 giây (conclusion, future work, summary)
+  → Tổng: ~4 phút
 
 ================================================================================
 
 PHẦN 1: PROBLEM OVERVIEW AND APPROACH (2-3 phút)
 =================================================
 
-[Cell 1: Title và Introduction - 15 giây]
+[Cell 1: Setup, CIFAR-10 Visualization và Introduction - 45 giây]
 "Chào thầy, em là Hải Dương. Hôm nay em xin trình bày về đồ án cuối kỳ môn Lập trình Song song.
 
 Đồ án này tập trung vào việc học biểu diễn đặc trưng không giám sát bằng Auto Encoder 
-để phân loại ảnh trên bộ dữ liệu CIFAR-10."
+để phân loại ảnh trên bộ dữ liệu CIFAR-10.
 
-[Cell 2: Problem Statement - 30 giây]
-"Vấn đề chính của đồ án này là làm sao để tự động khám phá các biểu diễn tốt của dữ liệu 
-mà không cần nhãn trong giai đoạn học đặc trưng.
-
-Chúng em thực hiện theo 2 giai đoạn:
-- Giai đoạn 1: Học đặc trưng không giám sát, huấn luyện Auto Encoder để tái tạo ảnh CIFAR-10
-- Giai đoạn 2: Phân loại có giám sát, trích xuất đặc trưng và huấn luyện SVM Classifier"
-
-[Cell 3: Motivation for GPU Acceleration - 30 giây]
-"Về Motivation thì chúng em đặt ra câu hỏi: Tại sao cần có GPU?
-
-Việc huấn luyện mạng Neural trên CPU cực kỳ chậm do:
-- Số lượng lớn các phép toán ma trận trong Convolution
-- Thực thi tuần tự giới hạn throughput
-- Bộ dữ liệu lớn với hơn 50.000 ảnh training
-
-Song song hóa trên GPU có thể đạt được tốc độ nhanh hơn 20 lần nhờ:
-- Tính toán song song trên hàng nghìn CUDA Core
-- Tối ưu pattern truy cập bộ nhớ
-- Kernel fusion để giảm yêu cầu băng thông bộ nhớ"
-
-[Cell 4: Setup và CIFAR-10 Visualization - 45 giây]
-"Bây giờ em sẽ chạy cell setup để cài đặt dependency và tải dữ liệu CIFAR-10.
+Bây giờ em sẽ chạy cell setup để cài đặt dependency và tải dữ liệu CIFAR-10.
 [Chạy cell]
 
 CIFAR-10 là bộ dữ liệu benchmark phổ biến trong computer vision:
@@ -101,8 +73,27 @@ CIFAR-10 là bộ dữ liệu benchmark phổ biến trong computer vision:
 [Chỉ vào visualization]
 Đây là các mẫu ảnh từ mỗi class trong CIFAR-10."
 
-[Cell 5: Architecture Overview - 30 giây]
-"Kiến trúc Auto Encoder chúng em bao gồm:
+[Cell 2: Problem Statement, Motivation và Architecture - 90 giây]
+"Vấn đề chính của đồ án này là làm sao để tự động khám phá các biểu diễn tốt của dữ liệu 
+mà không cần nhãn trong giai đoạn học đặc trưng.
+
+Chúng em thực hiện theo 2 giai đoạn:
+- Giai đoạn 1: Học đặc trưng không giám sát, huấn luyện Auto Encoder để tái tạo ảnh CIFAR-10
+- Giai đoạn 2: Phân loại có giám sát, trích xuất đặc trưng và huấn luyện SVM Classifier
+
+Về Motivation thì chúng em đặt ra câu hỏi: Tại sao cần có GPU?
+
+Việc huấn luyện mạng Neural trên CPU cực kỳ chậm do:
+- Số lượng lớn các phép toán ma trận trong Convolution
+- Thực thi tuần tự giới hạn throughput
+- Bộ dữ liệu lớn với hơn 50.000 ảnh training
+
+Song song hóa trên GPU có thể đạt được tốc độ nhanh hơn 20 lần nhờ:
+- Tính toán song song trên hàng nghìn CUDA Core
+- Tối ưu pattern truy cập bộ nhớ
+- Kernel fusion để giảm yêu cầu băng thông bộ nhớ
+
+Kiến trúc Auto Encoder chúng em bao gồm:
 - Encoder: Nén ảnh 32x32x3 xuống Latent Representation 8x8x128 là 8192 chiều
 - Decoder: Tái tạo ảnh gốc từ Latent Representation
 
@@ -115,17 +106,17 @@ Tổng cộng có khoảng 751.875 tham số cần huấn luyện."
 PHẦN 2: LIVE DEMONSTRATION OF RUNNING CODE (5-7 phút)
 ======================================================
 
-[Cell 6: Project Initialization - 30 giây]
+[Cell 3: Project Initialization và Compilation - 60 giây]
 "Phần 2: Live Demonstration
 
 Bây giờ em sẽ chạy code thực tế. Đầu tiên là khởi tạo project và compile code CUDA.
-[Chạy cell và giải thích]
+[Chạy cell - git clone, download data, compilation]
 
 Chúng em compile các file .cu và .cpp với NVCC và g++:
 - Kiến trúc GPU được chỉ định: SM75 cho T4, SM80 cho A100
 - Link với các thư viện cần thiết như cuDNN, cuBLAS"
 
-[Cell 7: CPU Baseline Training - 45 giây]
+[Cell 4: CPU Baseline Training - 60 giây]
 "Để có baseline so sánh, chúng em bắt đầu với Implementation trên CPU, có thể mất một chút thời gian.
 [Chạy cell - có thể skip nếu lâu]
 
@@ -138,7 +129,7 @@ CPU baseline cho thấy với 2% dataset để test nhanh:
 Chúng em dùng nó làm baseline so sánh với phiên bản GPU.
 Chúng ta thấy rằng training trên CPU rất chậm, đặc biệt với full dataset."
 
-[Cell 8: GPU Basic Implementation - 60 giây]
+[Cell 5: GPU Basic Implementation - 60 giây]
 "Tiếp theo là phiên bản GPU cơ bản - Port toàn bộ code từ CPU lên GPU.
 [Chạy cell hoặc giải thích]
 
@@ -160,7 +151,7 @@ Kết quả:
 
 Đây là Improvement đầu tiên, chứng tỏ GPU Parallelization hiệu quả."
 
-[Cell 9: GPU Optimized Version 1 - 60 giây]
+[Cell 6: GPU Optimized Version 1 - 60 giây]
 "Phiên bản tối ưu đầu tiên tập trung vào tối ưu bộ nhớ với Shared Memory Tiling.
 [Chạy cell hoặc giải thích]
 
@@ -190,7 +181,7 @@ Kết quả với 2% dataset:
 
 Từ đó ta thấy Shared Memory Optimization mang lại improvement đáng kể."
 
-[Cell 10: GPU Optimized Version 2 - 60 giây]
+[Cell 7: GPU Optimized Version 2 và SVM Integration - 60 giây]
 "Phiên bản tối ưu thứ 2 tập trung vào các kỹ thuật nâng cao hơn.
 [Chạy cell hoặc giải thích]
 
@@ -225,21 +216,16 @@ Kết quả:
 - Memory usage vẫn là hơn 800 MB
 
 Với full dataset thì thời gian training sẽ giảm từ hàng giờ xuống còn vài phút.
-Ta thấy nếu mà áp dụng với full dataset thì thời gian training sẽ giảm rất nhiều, rất đáng kể."
+Ta thấy nếu mà áp dụng với full dataset thì thời gian training sẽ giảm rất nhiều, rất đáng kể.
 
-[Cell 11: Feature Extraction - 30 giây]
-"Sau khi huấn luyện Auto Encoder, chúng em trích xuất Features từ Encoder.
-[Chạy cell]
+Sau khi huấn luyện Auto Encoder, chúng em trích xuất Features từ Encoder và huấn luyện SVM.
+[Chạy cell feature extraction và SVM training]
 
 Quá trình này:
 - Load trained Encoder Weights
 - Chạy forward pass chỉ với Encoder, không có Decoder
 - Trích xuất 8192-dimensional features cho mỗi ảnh
-- Thời gian khoảng 20 giây cho 60.000 ảnh (50.000 ảnh train và 10.000 ảnh test)"
-
-[Cell 12: SVM Training - 30 giây]
-"Cuối cùng, chúng em huấn luyện SVM Classifier trên các Feature đã trích xuất.
-[Chạy cell]
+- Thời gian khoảng 20 giây cho 60.000 ảnh (50.000 ảnh train và 10.000 ảnh test)
 
 Sử dụng cuML SVM với:
 - Kernel: RBF (Radial Basis Function)
@@ -251,7 +237,7 @@ Sử dụng cuML SVM với:
 PHẦN 3: PERFORMANCE RESULTS AND ANALYSIS (5-7 phút)
 =====================================================
 
-[Cell 13: Performance Comparison Overview - 90 giây]
+[Cell 8: Performance Comparison Overview - 90 giây]
 "Bây giờ em sẽ trình bày phân tích về kết quả performance.
 [Chỉ vào comprehensive performance visualization - có 6 subplots]
 
@@ -286,7 +272,7 @@ Memory usage tăng từ 285MB lên 814MB, nhưng đổi lại tốc độ tăng 
 [Chỉ vào chart 6 - Summary Table - pause 2 giây]
 Bảng này tổng hợp tất cả các metrics quan trọng."
 
-[Cell 14: Training Loss Analysis - 60 giây]
+[Cell 9: Training Loss Analysis - 60 giây]
 "Phân tích training loss curves.
 [Chỉ vào loss visualization - có 2 subplots: full và zoomed]
 
@@ -310,7 +296,7 @@ Từ đó ta rút ra insights:
 - GPU version nhanh hơn nhưng cho kết quả tương đương về chất lượng
 - Optimization không làm thay đổi model behavior, chỉ tăng tốc độ"
 
-[Cell 15: Classification Performance - 90 giây]
+[Cell 10: Classification Performance - 90 giây]
 "Kết quả phân loại cuối cùng.
 [Chỉ vào comprehensive classification visualization - có nhiều subplots]
 
@@ -342,7 +328,7 @@ Per Class Accuracy Breakdown:
 [Chỉ vào Summary Statistics Table - pause 2 giây]
 Bảng này tóm tắt các metrics chi tiết cho từng Class."
 
-[Cell 16: Feature Extraction Performance - 45 giây]
+[Cell 11: Feature Extraction và SVM Training Performance - 60 giây]
 "Performance của Feature Extraction và SVM Training.
 [Chỉ vào pipeline performance visualization - pie chart và timeline]
 
@@ -364,12 +350,9 @@ Timeline cho thấy:
 - Tổng thời gian pipeline dưới 30 giây
 
 So với training time khoảng 11-12 phút, thì feature extraction rất là nhanh.
-Điều này cho phép chúng ta experiment với nhiều classifiers khác nhau."
+Điều này cho phép chúng ta experiment với nhiều classifiers khác nhau.
 
-[Cell 17: Memory Usage - 30 giây]
-"Sử dụng bộ nhớ:
-[Chỉ vào memory chart nếu có, hoặc đọc từ bảng]
-
+Sử dụng bộ nhớ:
 - CPU: khoảng 2,1 GB
 - GPU Basic: khoảng 2,1 GB
 - GPU Optimization Version 1: khoảng 2,3 GB
@@ -381,7 +364,7 @@ Memory usage tăng nhẹ nhưng đổi lại tốc độ tăng đáng kể."
 PHẦN 4: KEY OPTIMIZATIONS AND LESSONS LEARNED (3-5 phút)
 =========================================================
 
-[Cell 18: Key Technical Insights - 60 giây]
+[Cell 12: Key Technical Insights - 60 giây]
 "Key optimizations and lessons learned.
 
 Từ đồ án này chúng em học được:
@@ -401,7 +384,7 @@ Từ đồ án này chúng em học được:
 - Không phải optimization nào cũng hiệu quả, cần test và measure
 - Incremental optimization approach giúp hiểu rõ impact của từng technique"
 
-[Cell 19: Major Challenges and Solutions - 90 giây]
+[Cell 13: Major Challenges and Solutions - 90 giây]
 "Thách thức chính và cách giải quyết:
 
 Challenge 1: Memory Management
@@ -419,7 +402,7 @@ Challenge 3: Performance Tuning
 - Giải pháp: Profiling với nvprof để tìm bottlenecks, optimize từng phần
 - Bài học: Data-driven optimization approach hiệu quả hơn guesswork"
 
-[Cell 20: Conclusion và Future Work - 60 giây]
+[Cell 14-15: Conclusion và Future Work - 90 giây]
 "Tóm tắt kết quả chính của đồ án:
 
 ✓ Đạt được speedup 29,7 lần so với CPU baseline
@@ -495,11 +478,11 @@ GHI CHÚ CHO NGƯỜI THUYẾT TRÌNH:
    - Có thể record từng phần riêng và edit sau
 
 6. CELL-SPECIFIC NOTES:
-   - Cell setup: Có thể skip nếu đã chạy trước, chỉ giải thích
-   - Cell training: Nếu chạy lâu, có thể show log file hoặc kết quả đã có
-   - Cell visualization: Pause để audience nhìn, giải thích từng chart
-   - Cell analysis: Đọc số liệu cụ thể từ charts, không chỉ nói chung chung
-   - Cell code: Có thể show code snippets nếu có thời gian, nhưng không quá chi tiết
+   - Cell 1 (Setup): Có thể skip nếu đã chạy trước, chỉ giải thích
+   - Cell 3-4 (Initialization & CPU): Nếu chạy lâu, có thể show log file hoặc kết quả đã có
+   - Cell 5-7 (GPU implementations): Giải thích ngắn gọn, highlight key optimizations
+   - Cell 8-11 (Performance analysis): Pause để audience nhìn, giải thích từng chart, đọc số liệu cụ thể
+   - Cell 12-15 (Lessons & Conclusion): Tổng kết, nhấn mạnh achievements chính
 
 7. KEY NUMBERS TO HIGHLIGHT:
    - Speedup: 29,7 lần (vượt mục tiêu 20x) - nhấn mạnh nhiều lần
