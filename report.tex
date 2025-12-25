@@ -243,6 +243,59 @@ Nguyễn Triều Khoáng & 1, 2, 5, 6, 7, 8, 9, 10, 11 & 9 & Literature review, 
 \end{tabular}
 \end{center}
 
+\subsection*{Individual Responsibilities and Contribution}
+
+\subsubsection*{Huỳnh Lê Hải Dương (22127081) - Contribution: 100\%}
+
+\textbf{Primary Responsibilities:}
+\begin{itemize}
+    \item \textbf{CPU Baseline Implementation}: Designed and implemented all CPU-based neural network layers (Conv2D, MaxPool2D, ReLU, Upsampling) and complete autoencoder architecture with forward and backward propagation
+    \item \textbf{GPU Basic Implementation}: Ported all CPU layers to CUDA kernels, implemented parallel computation for convolution, pooling, and activation operations with proper GPU memory management
+    \item \textbf{Demo Interface}: Developed Gradio web interface for real-time image classification with model integration and visualization features
+    \item \textbf{Documentation}: Created comprehensive Jupyter notebook report with performance analysis, visualization charts, and code documentation
+    \item \textbf{Collaborative Tasks}: Worked with team member on literature review, data loader implementation, and video demonstration
+\end{itemize}
+
+\textbf{Key Contributions:}
+\begin{itemize}
+    \item Implemented core CPU and GPU autoencoder architectures
+    \item Designed modular layer architecture enabling easy GPU porting
+    \item Created end-to-end training pipeline with proper error handling
+    \item Developed user-friendly demo interface for system demonstration
+\end{itemize}
+
+\subsubsection*{Nguyễn Triều Khoáng (22127204) - Contribution: 100\%}
+
+\textbf{Primary Responsibilities:}
+\begin{itemize}
+    \item \textbf{GPU Optimization V1 \& V2}: Implemented shared memory tiling strategies, kernel fusion techniques (Conv2D + ReLU + Bias), CUDA streams for overlapping computation, and vectorized memory operations, achieving 29.7× speedup over CPU baseline
+    \item \textbf{Feature Extraction}: Implemented encoder feature extraction pipeline for both CPU and GPU paths with binary feature format for efficient storage
+    \item \textbf{SVM Training Pipeline}: Integrated cuML library for GPU-accelerated SVM training, achieving 67.57\% classification accuracy on test set
+    \item \textbf{Performance Analysis}: Created detailed performance analysis, optimization documentation, and comprehensive benchmarking results
+    \item \textbf{Collaborative Tasks}: Worked with team member on literature review, data loader implementation, demo interface, and video demonstration
+\end{itemize}
+
+\textbf{Key Contributions:}
+\begin{itemize}
+    \item Achieved significant GPU speedup through advanced optimization techniques
+    \item Implemented complete feature extraction and classification pipeline
+    \item Integrated cuML for GPU-accelerated machine learning
+    \item Created comprehensive performance analysis and optimization reports
+\end{itemize}
+
+\subsection*{Contribution Summary}
+
+Both team members completed all their assigned tasks with 100\% completion rate. The project demonstrates effective collaboration with clear task distribution and equal contribution from both members.
+
+\begin{center}
+\begin{tabular}{|c|c|p{8cm}|}
+\hline
+\textbf{Student} & \textbf{Contribution} & \textbf{Primary Focus Areas} \\ \hline
+Huỳnh Lê Hải Dương & \textbf{100\%} & CPU/GPU core implementation, autoencoder architecture, demo interface, documentation \\ \hline
+Nguyễn Triều Khoáng & \textbf{100\%} & GPU optimizations, feature extraction, SVM training, performance analysis \\ \hline
+\end{tabular}
+\end{center}
+
 \subsection*{Key Achievements}
 \begin{itemize}
     \item \textbf{Performance Optimization}: Achieved 10.91× speedup over CPU baseline through GPU parallelization and optimizations
