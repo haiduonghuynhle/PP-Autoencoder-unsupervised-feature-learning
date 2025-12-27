@@ -307,3 +307,4 @@ void initialize_bias_zero(float* bias, int size) {
 
 } // namespace cpu
 
+

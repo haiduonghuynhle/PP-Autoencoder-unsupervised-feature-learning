@@ -286,3 +286,4 @@ struct TrainingStats {
 
 #endif // AUTOENCODER_H
 
+

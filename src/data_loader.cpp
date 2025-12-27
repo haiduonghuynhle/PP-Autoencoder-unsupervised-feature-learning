@@ -241,3 +241,4 @@ int BatchGenerator::num_batches() const {
     return (total + batch_size - 1) / batch_size;
 }
 
+

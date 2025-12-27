@@ -574,3 +574,4 @@ void sgd_update(float* d_weights, const float* d_gradients,
 
 } // namespace gpu
 
+

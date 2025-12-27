@@ -1593,3 +1593,4 @@ void train_gpu_optimized_v2(CIFAR10Dataset& dataset, const TrainingConfig& confi
     std::cout << "========================================\n" << std::endl;
 }
 
+

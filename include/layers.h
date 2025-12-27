@@ -221,3 +221,4 @@ void sgd_update_vectorized(float* d_weights, const float* d_gradients,
 
 #endif // LAYERS_H
 
+
